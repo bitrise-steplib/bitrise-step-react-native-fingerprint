@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -38,40 +38,34 @@ func withKeyPrefix(prefix, fingerprint string) string {
 	return prefix + "-" + fingerprint
 }
 
-// fingerprintPaths returns a deterministic SHA-256 hex digest over the files
-// selected by paths (relative to projectDir), excluding anything matched by
-// ignore. Directory entries are walked recursively; glob/doublestar patterns
-// are supported. Each file contributes its projectDir-relative path (so the
-// digest is independent of where the project is checked out) bound to its own
-// content hash.
-func fingerprintPaths(projectDir string, paths, ignore []string, logger log.Logger) (string, error) {
+// fingerprintPaths returns a deterministic SHA-256 hex digest over the files in
+// fsys selected by paths, excluding anything matched by ignore. Every entry is
+// treated as a doublestar pattern — a plain path is just a trivial pattern —
+// and directory matches are walked recursively. Each file contributes its
+// fsys-relative path (so the digest is independent of where the project is
+// checked out) bound to its own content hash.
+func fingerprintPaths(fsys fs.FS, paths, ignore []string, logger log.Logger) (string, error) {
 	seen := map[string]bool{}
 	var rels []string
-	add := func(rel string) {
-		rel = filepath.ToSlash(rel)
-		if !seen[rel] {
-			seen[rel] = true
-			rels = append(rels, rel)
-		}
-	}
-
 	for _, p := range paths {
-		p = filepath.ToSlash(p)
-		if strings.ContainsAny(p, "*?[") {
-			matches, err := doublestar.Glob(os.DirFS(projectDir), p)
-			if err != nil {
-				logger.Warnf("Invalid pattern %q: %s", p, err)
-				continue
-			}
-			if len(matches) == 0 {
-				logger.Warnf("No match for pattern: %s", p)
-			}
-			for _, m := range matches {
-				collect(projectDir, m, ignore, add, logger)
-			}
+		pattern := path.Clean(filepath.ToSlash(p))
+		matches, err := doublestar.Glob(fsys, pattern)
+		if err != nil {
+			logger.Warnf("Invalid path pattern %q: %s", p, err)
 			continue
 		}
-		collect(projectDir, p, ignore, add, logger)
+		if len(matches) == 0 {
+			logger.Warnf("No match for %q", p)
+			continue
+		}
+		for _, match := range matches {
+			for _, rel := range collect(fsys, match, ignore, logger) {
+				if !seen[rel] {
+					seen[rel] = true
+					rels = append(rels, rel)
+				}
+			}
+		}
 	}
 
 	if len(rels) == 0 {
@@ -81,7 +75,7 @@ func fingerprintPaths(projectDir string, paths, ignore []string, logger log.Logg
 
 	outer := sha256.New()
 	for _, rel := range rels {
-		fileHash, err := hashFileContent(filepath.Join(projectDir, filepath.FromSlash(rel)))
+		fileHash, err := hashFileContent(fsys, rel)
 		if err != nil {
 			return "", err
 		}
@@ -93,44 +87,31 @@ func fingerprintPaths(projectDir string, paths, ignore []string, logger log.Logg
 	return hex.EncodeToString(outer.Sum(nil)), nil
 }
 
-// collect adds rel (a projectDir-relative path) to the set. If rel is a
-// directory it is walked recursively; ignored entries and symlinks are skipped.
-func collect(projectDir, rel string, ignore []string, add func(string), logger log.Logger) {
-	full := filepath.Join(projectDir, filepath.FromSlash(rel))
-	info, err := os.Lstat(full)
+// collect returns the fsys-relative paths of the regular files at root, walking
+// it recursively if it is a directory. Ignored entries and symlinks are skipped
+// (ignored directories are not descended into).
+func collect(fsys fs.FS, root string, ignore []string, logger log.Logger) []string {
+	info, err := fs.Stat(fsys, root)
 	if err != nil {
-		logger.Warnf("Skipping %q: %s", rel, err)
-		return
-	}
-
-	if info.Mode()&os.ModeSymlink != 0 {
-		logger.Debugf("Skipping symlink: %s", rel)
-		return
+		logger.Warnf("Skipping %q: %s", root, err)
+		return nil
 	}
 
 	if !info.IsDir() {
-		if isIgnored(rel, ignore) {
-			return
-		}
-		if info.Mode().IsRegular() {
-			add(rel)
-		}
-		return
-	}
-
-	_ = filepath.WalkDir(full, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			logger.Warnf("Skipping %q: %s", path, walkErr)
-			return nil //nolint:nilerr
-		}
-		childRel, err := filepath.Rel(projectDir, path)
-		if err != nil {
+		if isIgnored(root, ignore) || !info.Mode().IsRegular() {
 			return nil
 		}
-		childRel = filepath.ToSlash(childRel)
+		return []string{root}
+	}
 
+	var out []string
+	_ = fs.WalkDir(fsys, root, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			logger.Warnf("Skipping %q: %s", p, walkErr)
+			return nil //nolint:nilerr
+		}
 		if d.IsDir() {
-			if childRel != rel && isIgnored(childRel, ignore) {
+			if p != root && isIgnored(p, ignore) {
 				return fs.SkipDir
 			}
 			return nil
@@ -138,40 +119,39 @@ func collect(projectDir, rel string, ignore []string, add func(string), logger l
 		if d.Type()&fs.ModeSymlink != 0 || !d.Type().IsRegular() {
 			return nil
 		}
-		if isIgnored(childRel, ignore) {
-			return nil
+		if !isIgnored(p, ignore) {
+			out = append(out, p)
 		}
-		add(childRel)
 		return nil
 	})
+	return out
 }
 
-// isIgnored reports whether the projectDir-relative path matches any ignore
-// pattern, either as a doublestar glob or as a directory prefix.
+// isIgnored reports whether the fsys-relative path matches any ignore pattern,
+// either as a doublestar glob or as a directory prefix.
 func isIgnored(rel string, ignore []string) bool {
 	for _, pat := range ignore {
-		pat = filepath.ToSlash(pat)
+		pat = path.Clean(filepath.ToSlash(pat))
 		if ok, _ := doublestar.Match(pat, rel); ok {
 			return true
 		}
-		trimmed := strings.TrimSuffix(pat, "/")
-		if rel == trimmed || strings.HasPrefix(rel, trimmed+"/") {
+		if rel == pat || strings.HasPrefix(rel, pat+"/") {
 			return true
 		}
 	}
 	return false
 }
 
-func hashFileContent(path string) (string, error) {
-	f, err := os.Open(path)
+func hashFileContent(fsys fs.FS, name string) (string, error) {
+	f, err := fsys.Open(name)
 	if err != nil {
-		return "", fmt.Errorf("open %s: %w", path, err)
+		return "", fmt.Errorf("open %s: %w", name, err)
 	}
 	defer func() { _ = f.Close() }()
 
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
-		return "", fmt.Errorf("read %s: %w", path, err)
+		return "", fmt.Errorf("read %s: %w", name, err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }

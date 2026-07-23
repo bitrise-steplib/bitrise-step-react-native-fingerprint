@@ -2,6 +2,7 @@ package step
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/bitrise-io/go-steputils/v2/export"
 	"github.com/bitrise-io/go-steputils/v2/stepconf"
@@ -79,7 +80,7 @@ func (s FingerprintStep) Run(config Config) (Result, error) {
 		return Result{}, fmt.Errorf("no paths provided in 'paths'")
 	}
 
-	fingerprint, err := fingerprintPaths(config.ProjectDir, config.Paths, config.IgnorePaths, s.logger)
+	fingerprint, err := fingerprintPaths(os.DirFS(config.ProjectDir), config.Paths, config.IgnorePaths, s.logger)
 	if err != nil {
 		return Result{}, fmt.Errorf("fingerprint paths: %w", err)
 	}
