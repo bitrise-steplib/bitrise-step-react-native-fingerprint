@@ -1,0 +1,217 @@
+format_version: "11"
+default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOCAL-ONLY three-way benchmark: bitrise-silver (original) vs THIS repo vs Expo
+#
+# NOT a CI gate (needs Node + network). Run by hand:
+#   bitrise run --config ./e2e/three-way-compare.bitrise.yml test_compare_three_way
+#
+# Over a real managed Expo app + a small change history, computes three
+# fingerprints at each step and compares change-detection, using Expo's
+# semantically native-aware fingerprint as the reference for "did the native
+# app really change?":
+#   SILVER — bitrise-silver/steps-react-native-fingerprint, configured with the
+#            inputs from Silvercast's blog draft: file_paths = package.json,
+#            package-lock.json, app.json; key_prefix = build-fingerprint.
+#   OURS   — this repo's default `key` (checksum of native inputs), app-scoped.
+#   EXPO   — @expo/fingerprint hash.
+#
+# Per method (vs Expo): agree / over-invalidate (safe) / DANGER (method stable
+# while Expo changed -> missed a real change). DANGER fails the run.
+# ─────────────────────────────────────────────────────────────────────────────
+
+app:
+  envs:
+  - SAMPLE_REPO: https://github.com/bitrise-silver/expo-build-fingerprint-demo.git
+  - SAMPLE_SHA: ef551696ce586f1d07b2417a6b3971962f4a2287
+  - SILVER_REPO: https://github.com/bitrise-silver/steps-react-native-fingerprint.git
+  - APP_DIR: _tmp_cmp3
+  - SILVER_DIR: _tmp_silver_step
+  - OUR_KEY: "{{ checksum \"_tmp_cmp3/package.json\" \"_tmp_cmp3/package-lock.json\" \"_tmp_cmp3/yarn.lock\" \"_tmp_cmp3/pnpm-lock.yaml\" \"_tmp_cmp3/app.json\" \"_tmp_cmp3/app.config.js\" \"_tmp_cmp3/ios/Podfile.lock\" \"_tmp_cmp3/android/**/*.gradle\" \"_tmp_cmp3/android/gradle.properties\" }}"
+
+workflows:
+  test_compare_three_way:
+    summary: Compare bitrise-silver, this repo, and @expo/fingerprint over a real Expo app.
+    steps:
+    - script:
+        title: Setup — clone app + silver step, install deps, write helpers
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            command -v node >/dev/null || { echo "Node.js required"; exit 1; }
+
+            rm -rf "$APP_DIR" "$SILVER_DIR"
+            git clone --quiet "$SAMPLE_REPO" "$APP_DIR"
+            git -C "$APP_DIR" checkout --quiet "$SAMPLE_SHA"
+            git clone --quiet "$SILVER_REPO" "$SILVER_DIR"
+
+            ( cd "$APP_DIR"
+              npm ci --no-audit --no-fund
+              npm install --no-save --no-audit --no-fund @expo/fingerprint )
+
+            cat > "$APP_DIR/_expo_hash.js" <<'JS'
+            require("@expo/fingerprint").createFingerprintAsync(".")
+              .then(f => console.log(f.hash))
+              .catch(e => { console.error(e.message); process.exit(1); });
+            JS
+
+            cat > "$APP_DIR/_report.sh" <<'SH'
+            DANGER=0
+            st() { [ "$1" = "$2" ] && echo stable || echo CHANGED; }
+            verdict() { # method_status expo_status
+              if [ "$1" = stable ] && [ "$2" = CHANGED ]; then echo "DANGER"; DANGER=1
+              elif [ "$1" = CHANGED ] && [ "$2" = stable ]; then echo "over-invalidate(safe)"
+              else echo "agree"; fi
+            }
+            row() { # name  sb sa  ob oa  eb ea
+              local n="$1" ss os es
+              ss=$(st "$2" "$3"); os=$(st "$4" "$5"); es=$(st "$6" "$7")
+              printf "  %-20s SILVER=%-8s[%s]  OURS=%-8s[%s]  EXPO=%-8s\n" \
+                "$n" "$ss" "$(verdict "$ss" "$es")" "$os" "$(verdict "$os" "$es")" "$es"
+            }
+            SH
+
+    # ── baseline ──
+    - path::_tmp_silver_step:
+        title: SILVER — baseline
+        inputs:
+        - file_paths: |-
+            _tmp_cmp3/package.json
+            _tmp_cmp3/package-lock.json
+            _tmp_cmp3/app.json
+        - key_prefix: build-fingerprint
+    - script:
+        title: save SILVER_BASE
+        inputs:
+        - content: envman add --key SILVER_BASE --value "$BUNDLE_HASH_STRING"
+    - path::./:
+        title: OURS — baseline
+        inputs:
+        - key: $OUR_KEY
+    - script:
+        title: save OURS_BASE + EXPO_BASE
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            envman add --key OURS_BASE --value "$BUNDLE_HASH_STRING"
+            envman add --key EXPO_BASE --value "$( cd "$APP_DIR" && node _expo_hash.js )"
+
+    # ── Scenario 1: JS-only edit ──
+    - script:
+        title: "Scenario JS — edit App.tsx"
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            git -C "$APP_DIR" checkout -- .
+            printf '\n// js-only edit\n' >> "$APP_DIR/App.tsx"
+    - path::_tmp_silver_step:
+        title: SILVER — after JS edit
+        inputs:
+        - file_paths: |-
+            _tmp_cmp3/package.json
+            _tmp_cmp3/package-lock.json
+            _tmp_cmp3/app.json
+        - key_prefix: build-fingerprint
+    - script:
+        inputs:
+        - content: envman add --key SILVER_JS --value "$BUNDLE_HASH_STRING"
+    - path::./:
+        title: OURS — after JS edit
+        inputs:
+        - key: $OUR_KEY
+    - script:
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            envman add --key OURS_JS --value "$BUNDLE_HASH_STRING"
+            envman add --key EXPO_JS --value "$( cd "$APP_DIR" && node _expo_hash.js )"
+
+    # ── Scenario 2: config change (app.json) ──
+    - script:
+        title: "Scenario CONFIG — edit app.json"
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            git -C "$APP_DIR" checkout -- .
+            node -e 'const p="'"$APP_DIR"'/app.json",d=require("./"+p);d.expo.extra={marker:"x"};require("fs").writeFileSync(p,JSON.stringify(d,null,2))'
+    - path::_tmp_silver_step:
+        title: SILVER — after config change
+        inputs:
+        - file_paths: |-
+            _tmp_cmp3/package.json
+            _tmp_cmp3/package-lock.json
+            _tmp_cmp3/app.json
+        - key_prefix: build-fingerprint
+    - script:
+        inputs:
+        - content: envman add --key SILVER_CFG --value "$BUNDLE_HASH_STRING"
+    - path::./:
+        title: OURS — after config change
+        inputs:
+        - key: $OUR_KEY
+    - script:
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            envman add --key OURS_CFG --value "$BUNDLE_HASH_STRING"
+            envman add --key EXPO_CFG --value "$( cd "$APP_DIR" && node _expo_hash.js )"
+
+    # ── Scenario 3: pure-JS dependency added ──
+    - script:
+        title: "Scenario DEP-JS — add a pure-JS dependency"
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            git -C "$APP_DIR" checkout -- .
+            node -e 'const p="'"$APP_DIR"'/package.json",d=require("./"+p);d.dependencies.lodash="^4.17.21";require("fs").writeFileSync(p,JSON.stringify(d,null,2))'
+    - path::_tmp_silver_step:
+        title: SILVER — after pure-JS dep add
+        inputs:
+        - file_paths: |-
+            _tmp_cmp3/package.json
+            _tmp_cmp3/package-lock.json
+            _tmp_cmp3/app.json
+        - key_prefix: build-fingerprint
+    - script:
+        inputs:
+        - content: envman add --key SILVER_DEP --value "$BUNDLE_HASH_STRING"
+    - path::./:
+        title: OURS — after pure-JS dep add
+        inputs:
+        - key: $OUR_KEY
+    - script:
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            envman add --key OURS_DEP --value "$BUNDLE_HASH_STRING"
+            envman add --key EXPO_DEP --value "$( cd "$APP_DIR" && node _expo_hash.js )"
+
+    - script:
+        title: Report — three-way comparison
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            source "$APP_DIR/_report.sh"
+            echo
+            echo "==== three-way fingerprint comparison (vs baseline; verdict is vs EXPO) ===="
+            echo "baseline: silver=$SILVER_BASE"
+            echo "          ours=$OURS_BASE"
+            echo "          expo=$EXPO_BASE"
+            row "JS-only edit"       "$SILVER_BASE" "$SILVER_JS"  "$OURS_BASE" "$OURS_JS"  "$EXPO_BASE" "$EXPO_JS"
+            row "config change"      "$SILVER_BASE" "$SILVER_CFG" "$OURS_BASE" "$OURS_CFG" "$EXPO_BASE" "$EXPO_CFG"
+            row "pure-JS dependency" "$SILVER_BASE" "$SILVER_DEP" "$OURS_BASE" "$OURS_DEP" "$EXPO_BASE" "$EXPO_DEP"
+            echo
+            if [ "$DANGER" -ne 0 ]; then
+              echo "RESULT: at least one method missed a change Expo detected (see DANGER above)"; exit 1
+            fi
+            echo "RESULT: no dangerous misses"
