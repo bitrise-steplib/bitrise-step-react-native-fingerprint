@@ -2,22 +2,34 @@ format_version: "11"
 default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
 
 # Self-contained e2e suite: no secrets, no network, no external tools.
-# Each test builds a realistic React Native project layout, runs the step, and
-# asserts how the exported BUNDLE_HASH_STRING reacts to a given change.
+# Each test builds a realistic React Native project layout under $TEST_DIR, runs
+# the step against it, and asserts how BUNDLE_HASH_STRING reacts to a change.
 #
-# Coverage: determinism, template features (getenv + literal prefix), and the
-# change factors that decide whether a cached native build is reusable —
-#   reuse:      a JS-only change must NOT move the key.
+# Coverage: determinism, key_prefix namespacing, the advanced key-template
+# override, and the change factors that decide whether a cached native build is
+# reusable —
+#   reuse:      a JS-only change, and a change to an ignored path, must NOT move
+#               the key.
 #   invalidate: a native, dependency, config, or patch change MUST move the key.
 
 app:
   envs:
   - TEST_DIR: _tmp_e2e
-  # A native-aware key mirroring the step's default, scoped to the test project.
-  - KEY: "{{ checksum \"_tmp_e2e/package.json\" \"_tmp_e2e/package-lock.json\" \"_tmp_e2e/yarn.lock\" \"_tmp_e2e/pnpm-lock.yaml\" \"_tmp_e2e/app.json\" \"_tmp_e2e/app.config.js\" \"_tmp_e2e/patches/**/*\" \"_tmp_e2e/ios/Podfile.lock\" \"_tmp_e2e/android/**/*.gradle\" \"_tmp_e2e/android/gradle.properties\" }}"
+  - PATHS: |-
+      package.json
+      package-lock.json
+      app.json
+      patches
+      ios
+      android
+  - IGNORE: |-
+      android/build
+      ios/Pods
+      **/*.log
 
 step_bundles:
-  # Creates a realistic RN project under $TEST_DIR (with native, config, patch).
+  # Creates a realistic RN project under $TEST_DIR (native dirs, config, patch,
+  # plus a file under an ignored path and a JS file outside `paths`).
   setup_rn:
     steps:
     - script:
@@ -28,33 +40,27 @@ step_bundles:
             set -euo pipefail
             D="$TEST_DIR"
             rm -rf "$D"
-            mkdir -p "$D/ios" "$D/android/app" "$D/patches"
+            mkdir -p "$D/ios" "$D/android/app" "$D/android/build" "$D/patches"
             printf '{"name":"rn-demo","dependencies":{"react-native":"0.76.0"}}\n' > "$D/package.json"
             printf '{"lockfileVersion":3}\n'                       > "$D/package-lock.json"
             printf '{"name":"rn-demo","displayName":"RN Demo"}\n'  > "$D/app.json"
             printf 'export default function App(){ return null; }\n' > "$D/App.tsx"
             printf 'diff --git a b\n-old\n+new\n'                  > "$D/patches/react-native+0.76.0.patch"
             printf 'PODS:\n  - React (0.76.0)\n'                   > "$D/ios/Podfile.lock"
-            printf 'buildscript { ext { minSdkVersion = 24 } }\n'  > "$D/android/build.gradle"
+            printf 'buildscript {}\n'                              > "$D/android/build.gradle"
             printf 'dependencies {}\n'                             > "$D/android/app/build.gradle"
             printf 'org.gradle.jvmargs=-Xmx2g\n'                   > "$D/android/gradle.properties"
+            printf 'generated v1\n'                                > "$D/android/build/generated.txt"
 
 workflows:
-  # The evaluated key is deterministic across runs of identical inputs.
   test_deterministic:
     steps:
     - bundle::setup_rn: {}
-    - path::./:
-        title: first run
-        inputs:
-        - key: $KEY
+    - path::./: {title: first run, inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
     - script:
         inputs:
         - content: envman add --key H1 --value "$BUNDLE_HASH_STRING"
-    - path::./:
-        title: second run
-        inputs:
-        - key: $KEY
+    - path::./: {title: second run, inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
     - script:
         title: Verify — identical
         inputs:
@@ -62,52 +68,62 @@ workflows:
             #!/usr/bin/env bash
             set -euo pipefail
             [ -n "$BUNDLE_HASH_STRING" ] || { echo "FAIL: empty key"; exit 1; }
-            [ "$H1" = "$BUNDLE_HASH_STRING" ] || { echo "FAIL: not deterministic ($H1 != $BUNDLE_HASH_STRING)"; exit 1; }
+            [ "$H1" = "$BUNDLE_HASH_STRING" ] || { echo "FAIL: not deterministic"; exit 1; }
             echo "PASS: deterministic"
 
-  # Template features: literal prefix + getenv + checksum combine into the key.
-  test_template_features:
-    envs:
-    - PLATFORM_TAG: ios-release
+  test_key_prefix:
     steps:
     - bundle::setup_rn: {}
-    - path::./:
-        title: prefix + getenv + checksum
-        inputs:
-        - key: "bundle-{{ getenv \"PLATFORM_TAG\" }}-{{ checksum \"$TEST_DIR/package.json\" }}"
+    - path::./: {title: with prefix, inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}, {key_prefix: ios}]}
     - script:
-        title: Verify — prefix and env value present
+        title: Verify — prefix applied
         inputs:
         - content: |-
             #!/usr/bin/env bash
             set -euo pipefail
             echo "key: $BUNDLE_HASH_STRING"
             case "$BUNDLE_HASH_STRING" in
-              bundle-ios-release-*) echo "PASS: prefix + getenv applied" ;;
-              *) echo "FAIL: expected 'bundle-ios-release-' prefix"; exit 1 ;;
+              ios-*) echo "PASS: prefix applied" ;;
+              *) echo "FAIL: expected 'ios-' prefix"; exit 1 ;;
             esac
 
-  # Reuse: a JS-only change must NOT move the key (cached native build is valid).
-  test_js_only_change_is_stable:
+  test_advanced_key_template:
+    envs:
+    - PLATFORM_TAG: ios-release
     steps:
     - bundle::setup_rn: {}
     - path::./:
+        title: Debug key override
         inputs:
-        - key: $KEY
+        - key: "tpl-{{ getenv \"PLATFORM_TAG\" }}-{{ checksum \"$TEST_DIR/package.json\" }}"
+    - script:
+        title: Verify — template used
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            echo "key: $BUNDLE_HASH_STRING"
+            case "$BUNDLE_HASH_STRING" in
+              tpl-ios-release-*) echo "PASS: advanced template override applied" ;;
+              *) echo "FAIL: expected 'tpl-ios-release-' prefix"; exit 1 ;;
+            esac
+
+  test_js_only_change_is_stable:
+    steps:
+    - bundle::setup_rn: {}
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
     - script:
         inputs:
         - content: envman add --key H1 --value "$BUNDLE_HASH_STRING"
     - script:
-        title: Change — edit JS and add an unlisted JS file
+        title: Change — edit JS outside `paths`
         inputs:
         - content: |-
             #!/usr/bin/env bash
             set -euo pipefail
             printf '\n// edited\n' >> "$TEST_DIR/App.tsx"
-            echo 'export const x = 1;' > "$TEST_DIR/src_new.js"
-    - path::./:
-        inputs:
-        - key: $KEY
+            echo 'export const x = 1;' > "$TEST_DIR/extra.js"
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
     - script:
         title: Verify — key unchanged
         inputs:
@@ -117,13 +133,34 @@ workflows:
             [ "$H1" = "$BUNDLE_HASH_STRING" ] || { echo "FAIL: JS-only change moved the key"; exit 1; }
             echo "PASS: JS-only change reuses the cached build"
 
-  # Invalidate: a dependency (lockfile) change must move the key.
+  test_ignored_change_is_stable:
+    steps:
+    - bundle::setup_rn: {}
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
+    - script:
+        inputs:
+        - content: envman add --key H1 --value "$BUNDLE_HASH_STRING"
+    - script:
+        title: Change — edit a file under an ignored path
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            printf 'generated v2\n' > "$TEST_DIR/android/build/generated.txt"
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
+    - script:
+        title: Verify — key unchanged
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            [ "$H1" = "$BUNDLE_HASH_STRING" ] || { echo "FAIL: ignored-path change moved the key"; exit 1; }
+            echo "PASS: ignored-path change is excluded"
+
   test_dependency_change_invalidates:
     steps:
     - bundle::setup_rn: {}
-    - path::./:
-        inputs:
-        - key: $KEY
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
     - script:
         inputs:
         - content: envman add --key H1 --value "$BUNDLE_HASH_STRING"
@@ -134,9 +171,7 @@ workflows:
             #!/usr/bin/env bash
             set -euo pipefail
             echo '{"lockfileVersion":3,"packages":{"changed":true}}' > "$TEST_DIR/package-lock.json"
-    - path::./:
-        inputs:
-        - key: $KEY
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
     - script:
         title: Verify — key changed
         inputs:
@@ -146,13 +181,10 @@ workflows:
             [ "$H1" != "$BUNDLE_HASH_STRING" ] || { echo "FAIL: dependency change not detected"; exit 1; }
             echo "PASS: dependency change invalidates"
 
-  # Invalidate: an app config (app.json) change must move the key.
   test_config_change_invalidates:
     steps:
     - bundle::setup_rn: {}
-    - path::./:
-        inputs:
-        - key: $KEY
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
     - script:
         inputs:
         - content: envman add --key H1 --value "$BUNDLE_HASH_STRING"
@@ -163,9 +195,7 @@ workflows:
             #!/usr/bin/env bash
             set -euo pipefail
             echo '{"name":"rn-demo","displayName":"RN Demo v2"}' > "$TEST_DIR/app.json"
-    - path::./:
-        inputs:
-        - key: $KEY
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
     - script:
         title: Verify — key changed
         inputs:
@@ -175,14 +205,10 @@ workflows:
             [ "$H1" != "$BUNDLE_HASH_STRING" ] || { echo "FAIL: config change not detected"; exit 1; }
             echo "PASS: config change invalidates"
 
-  # Invalidate: a native change (Podfile.lock + a new nested Gradle file) must
-  # move the key. Also exercises the `**` doublestar glob picking up new files.
   test_native_change_invalidates:
     steps:
     - bundle::setup_rn: {}
-    - path::./:
-        inputs:
-        - key: $KEY
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
     - script:
         inputs:
         - content: envman add --key H1 --value "$BUNDLE_HASH_STRING"
@@ -195,9 +221,7 @@ workflows:
             printf '\n  - RNScreens (4.0.0)\n' >> "$TEST_DIR/ios/Podfile.lock"
             mkdir -p "$TEST_DIR/android/feature"
             echo 'dependencies {}' > "$TEST_DIR/android/feature/build.gradle"
-    - path::./:
-        inputs:
-        - key: $KEY
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
     - script:
         title: Verify — key changed
         inputs:
@@ -207,13 +231,10 @@ workflows:
             [ "$H1" != "$BUNDLE_HASH_STRING" ] || { echo "FAIL: native change not detected"; exit 1; }
             echo "PASS: native change invalidates"
 
-  # Invalidate: a patch-package patch (patches/) change must move the key.
   test_patch_change_invalidates:
     steps:
     - bundle::setup_rn: {}
-    - path::./:
-        inputs:
-        - key: $KEY
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
     - script:
         inputs:
         - content: envman add --key H1 --value "$BUNDLE_HASH_STRING"
@@ -224,9 +245,7 @@ workflows:
             #!/usr/bin/env bash
             set -euo pipefail
             printf '\n+another change\n' >> "$TEST_DIR/patches/react-native+0.76.0.patch"
-    - path::./:
-        inputs:
-        - key: $KEY
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
     - script:
         title: Verify — key changed
         inputs:

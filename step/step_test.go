@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bitrise-io/go-steputils/v2/cache/keytemplate"
@@ -13,8 +14,6 @@ import (
 	"github.com/bitrise-io/go-utils/v2/log"
 )
 
-// fakeEvaluator is a stand-in KeyEvaluator for exercising Run's control flow
-// without touching the filesystem.
 type fakeEvaluator struct {
 	out string
 	err error
@@ -22,9 +21,12 @@ type fakeEvaluator struct {
 
 func (f fakeEvaluator) Evaluate(string) (string, error) { return f.out, f.err }
 
-// realEvaluator wires a keytemplate.Model exactly like production does.
 func realEvaluator() KeyEvaluator {
 	return keytemplate.NewModel(env.NewRepository(), log.NewLogger())
+}
+
+func newStep(ev KeyEvaluator) FingerprintStep {
+	return NewFingerprintStep(log.NewLogger(), nil, ev, export.Exporter{})
 }
 
 func writeFile(t *testing.T, path, content string) {
@@ -37,104 +39,186 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
-func runKey(t *testing.T, key string) string {
+// runPaths fingerprints a project dir via the paths/ignore mechanism.
+func runPaths(t *testing.T, dir string, paths, ignore []string, prefix string) (string, error) {
 	t.Helper()
-	s := NewFingerprintStep(log.NewLogger(), nil, realEvaluator(), export.Exporter{})
-	res, err := s.Run(Config{Key: key})
-	if err != nil {
-		t.Fatalf("Run(%q): %v", key, err)
-	}
-	return res.BundleHashString
+	res, err := newStep(nil).Run(Config{ProjectDir: dir, Paths: paths, IgnorePaths: ignore, KeyPrefix: prefix})
+	return res.BundleHashString, err
 }
 
-func TestRun_ChecksumDeterministicWithLiteralPrefix(t *testing.T) {
+func mustRunPaths(t *testing.T, dir string, paths, ignore []string, prefix string) string {
+	t.Helper()
+	h, err := runPaths(t, dir, paths, ignore, prefix)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	return h
+}
+
+func TestFingerprint_DeterministicWithPrefix(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "package.json"), `{"name":"demo"}`)
-	writeFile(t, filepath.Join(dir, "package-lock.json"), `{"lockfileVersion":3}`)
-	t.Chdir(dir)
+	writeFile(t, filepath.Join(dir, "ios", "Podfile.lock"), "PODS: []")
+	writeFile(t, filepath.Join(dir, "android", "app", "build.gradle"), "dependencies {}")
 
-	key := `rn-{{ checksum "package.json" "package-lock.json" }}`
-	h1 := runKey(t, key)
-	h2 := runKey(t, key)
+	paths := []string{"package.json", "ios", "android"}
+	h1 := mustRunPaths(t, dir, paths, nil, "bundle")
+	h2 := mustRunPaths(t, dir, paths, nil, "bundle")
 
 	if h1 != h2 {
 		t.Fatalf("not deterministic: %s != %s", h1, h2)
 	}
-	if got := h1[:3]; got != "rn-" {
-		t.Fatalf("literal prefix not preserved, got %q", h1)
+	if !strings.HasPrefix(h1, "bundle-") {
+		t.Fatalf("prefix not applied: %q", h1)
 	}
-	if len(h1) != len("rn-")+64 {
-		t.Fatalf("expected rn- + 64-char sha256, got %q (len %d)", h1, len(h1))
-	}
-}
-
-func TestRun_ChangesWhenChecksummedFileChanges(t *testing.T) {
-	dir := t.TempDir()
-	pkg := filepath.Join(dir, "package.json")
-	writeFile(t, pkg, `{"version":"1"}`)
-	t.Chdir(dir)
-
-	before := runKey(t, `{{ checksum "package.json" }}`)
-	writeFile(t, pkg, `{"version":"2"}`)
-	after := runKey(t, `{{ checksum "package.json" }}`)
-
-	if before == after {
-		t.Fatal("hash did not change when a checksummed file changed")
+	if got := strings.TrimPrefix(h1, "bundle-"); len(got) != 64 {
+		t.Fatalf("expected 64-char sha256, got %d (%q)", len(got), h1)
 	}
 }
 
-func TestRun_GlobMatchesNestedFilesAndDetectsNewFile(t *testing.T) {
+func TestFingerprint_DetectsNestedChangeAndNewFile(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "android", "build.gradle"), "buildscript {}")
-	writeFile(t, filepath.Join(dir, "android", "app", "build.gradle"), "dependencies {}")
-	t.Chdir(dir)
+	gradle := filepath.Join(dir, "android", "app", "build.gradle")
+	writeFile(t, gradle, "dependencies { v1 }")
 
-	key := `{{ checksum "android/**/*.gradle" }}`
-	before := runKey(t, key)
-	if len(before) != 64 {
-		t.Fatalf("expected 64-char sha256 from glob, got %q", before)
+	before := mustRunPaths(t, dir, []string{"android"}, nil, "")
+	writeFile(t, gradle, "dependencies { v2 }")
+	if after := mustRunPaths(t, dir, []string{"android"}, nil, ""); after == before {
+		t.Fatal("did not detect a nested file content change")
 	}
 
-	// A brand-new nested native file must move the fingerprint.
+	afterEdit := mustRunPaths(t, dir, []string{"android"}, nil, "")
 	writeFile(t, filepath.Join(dir, "android", "feature", "build.gradle"), "// new module")
-	after := runKey(t, key)
-	if before == after {
-		t.Fatal("glob did not detect a newly added matching file")
+	if after := mustRunPaths(t, dir, []string{"android"}, nil, ""); after == afterEdit {
+		t.Fatal("did not detect a newly added nested file")
 	}
 }
 
-func TestRun_EmptyResultFails(t *testing.T) {
-	s := NewFingerprintStep(log.NewLogger(), nil, fakeEvaluator{out: ""}, export.Exporter{})
-	if _, err := s.Run(Config{Key: `{{ checksum "nope" }}`}); err == nil {
-		t.Fatal("expected an error when the evaluated key is empty")
+func TestFingerprint_IgnoreExcludesMatches(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "android", "app", "build.gradle"), "real input")
+	writeFile(t, filepath.Join(dir, "android", "build", "output.txt"), "generated v1")
+
+	ignore := []string{"android/build"}
+	before := mustRunPaths(t, dir, []string{"android"}, ignore, "")
+
+	// Changing an ignored file must NOT move the fingerprint.
+	writeFile(t, filepath.Join(dir, "android", "build", "output.txt"), "generated v2")
+	if after := mustRunPaths(t, dir, []string{"android"}, ignore, ""); after != before {
+		t.Fatal("ignored file change moved the fingerprint")
+	}
+
+	// Changing a real input still must.
+	writeFile(t, filepath.Join(dir, "android", "app", "build.gradle"), "real input changed")
+	if after := mustRunPaths(t, dir, []string{"android"}, ignore, ""); after == before {
+		t.Fatal("real input change not detected")
 	}
 }
 
-func TestRun_EvaluatorErrorPropagates(t *testing.T) {
-	s := NewFingerprintStep(log.NewLogger(), nil, fakeEvaluator{err: errors.New("bad template")}, export.Exporter{})
-	if _, err := s.Run(Config{Key: "{{ invalid"}); err == nil {
+func TestFingerprint_GlobIgnorePattern(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "android", "app", "build.gradle"), "keep")
+	writeFile(t, filepath.Join(dir, "android", "app", "debug.log"), "noise v1")
+
+	ignore := []string{"**/*.log"}
+	before := mustRunPaths(t, dir, []string{"android"}, ignore, "")
+	writeFile(t, filepath.Join(dir, "android", "app", "debug.log"), "noise v2")
+	if after := mustRunPaths(t, dir, []string{"android"}, ignore, ""); after != before {
+		t.Fatal("glob-ignored file change moved the fingerprint")
+	}
+}
+
+func TestFingerprint_MissingPathSkipped(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "package.json"), `{"name":"demo"}`)
+
+	h, err := runPaths(t, dir, []string{"package.json", "does-not-exist", "ios"}, nil, "")
+	if err != nil {
+		t.Fatalf("missing paths should be skipped, got error: %v", err)
+	}
+	if len(h) != 64 {
+		t.Fatalf("expected a 64-char hash from the present file, got %q", h)
+	}
+}
+
+func TestFingerprint_GlobInPaths(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "android", "build.gradle"), "a")
+	writeFile(t, filepath.Join(dir, "android", "app", "build.gradle"), "b")
+
+	before := mustRunPaths(t, dir, []string{"android/**/*.gradle"}, nil, "")
+	if len(before) != 64 {
+		t.Fatalf("glob path produced no hash: %q", before)
+	}
+	writeFile(t, filepath.Join(dir, "android", "feature", "build.gradle"), "c")
+	if after := mustRunPaths(t, dir, []string{"android/**/*.gradle"}, nil, ""); after == before {
+		t.Fatal("glob path did not pick up a new match")
+	}
+}
+
+func TestRun_EmptyWhenEverythingIgnoredFails(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "android", "app", "build.gradle"), "x")
+	if _, err := runPaths(t, dir, []string{"android"}, []string{"android"}, ""); err == nil {
+		t.Fatal("expected an error when all paths are ignored")
+	}
+}
+
+func TestRun_DebugTemplateOverridesPaths(t *testing.T) {
+	// When key is set, the paths mechanism is bypassed entirely.
+	s := newStep(fakeEvaluator{out: "TEMPLATED"})
+	res, err := s.Run(Config{KeyTemplate: `{{ checksum "x" }}`, Paths: []string{"ignored"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.BundleHashString != "TEMPLATED" {
+		t.Fatalf("expected the template result, got %q", res.BundleHashString)
+	}
+}
+
+func TestRun_DebugTemplateRealChecksum(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "package.json"), `{"name":"demo"}`)
+	t.Chdir(dir)
+
+	res, err := newStep(realEvaluator()).Run(Config{KeyTemplate: `{{ checksum "package.json" }}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.BundleHashString) != 64 {
+		t.Fatalf("expected 64-char sha256, got %q", res.BundleHashString)
+	}
+}
+
+func TestRun_DebugTemplateEmptyAndErrorFail(t *testing.T) {
+	if _, err := newStep(fakeEvaluator{out: ""}).Run(Config{KeyTemplate: "x"}); err == nil {
+		t.Fatal("expected error on empty evaluated key")
+	}
+	if _, err := newStep(fakeEvaluator{err: errors.New("bad")}).Run(Config{KeyTemplate: "x"}); err == nil {
 		t.Fatal("expected the evaluator error to propagate")
 	}
 }
 
-func TestProcessConfig_RequiresKey(t *testing.T) {
-	parser := stepconf.NewInputParser(env.NewRepository())
-	s := NewFingerprintStep(log.NewLogger(), parser, nil, export.Exporter{})
-
-	// key unset -> required validation fails.
+func TestProcessConfig_ParsesListsAndDefaultsProjectDir(t *testing.T) {
+	t.Setenv("project_dir", "")
+	t.Setenv("paths", "package.json\n  ios  \n\n# comment\nandroid\n")
+	t.Setenv("ignore_paths", "ios/Pods\nandroid/build")
+	t.Setenv("key_prefix", "")
 	t.Setenv("key", "")
 	t.Setenv("verbose", "false")
-	if _, err := s.ProcessConfig(); err == nil {
-		t.Fatal("expected error when required 'key' is empty")
-	}
 
-	// key set -> parsed through.
-	t.Setenv("key", `{{ checksum "package.json" }}`)
-	cfg, err := s.ProcessConfig()
+	parser := stepconf.NewInputParser(env.NewRepository())
+	cfg, err := NewFingerprintStep(log.NewLogger(), parser, nil, export.Exporter{}).ProcessConfig()
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("ProcessConfig: %v", err)
 	}
-	if cfg.Key != `{{ checksum "package.json" }}` {
-		t.Fatalf("unexpected key: %q", cfg.Key)
+	if cfg.ProjectDir != "." {
+		t.Fatalf("project_dir default: got %q", cfg.ProjectDir)
+	}
+	if strings.Join(cfg.Paths, ",") != "package.json,ios,android" {
+		t.Fatalf("paths parse: got %v", cfg.Paths)
+	}
+	if strings.Join(cfg.IgnorePaths, ",") != "ios/Pods,android/build" {
+		t.Fatalf("ignore parse: got %v", cfg.IgnorePaths)
 	}
 }
