@@ -54,7 +54,6 @@ func (s FingerprintStep) ProcessConfig() (Config, error) {
 	}
 	stepconf.Print(input)
 	s.logger.Println()
-	s.logger.EnableDebugLog(input.Verbose)
 
 	paths := parsePaths(input.FilePaths)
 	if len(paths) == 0 {
@@ -70,9 +69,11 @@ func (s FingerprintStep) ProcessConfig() (Config, error) {
 
 // Run computes the fingerprint and applies the optional key prefix.
 func (s FingerprintStep) Run(config Config) (Result, error) {
-	s.logger.Debugf("Fingerprinting %d file(s):", len(config.FilePaths))
-	for _, p := range config.FilePaths {
-		s.logger.Debugf("  - %s", p)
+	if config.Verbose {
+		s.logger.Printf("Fingerprinting %d file(s):", len(config.FilePaths))
+		for _, p := range config.FilePaths {
+			s.logger.Printf("  - %s", p)
+		}
 	}
 
 	fingerprint, err := computeFingerprint(config.FilePaths)
