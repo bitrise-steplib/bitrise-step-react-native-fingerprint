@@ -1,0 +1,18 @@
+---
+format_version: "23"
+default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
+
+workflows:
+  test:
+    summary: Vet, build and unit-test the step.
+    steps:
+      - script@1:
+          title: go vet / build / test
+          inputs:
+            - content: |-
+                #!/usr/bin/env bash
+                set -euo pipefail
+                go version
+                go vet ./...
+                go build ./...
+                go test ./... -v

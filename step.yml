@@ -1,0 +1,56 @@
+title: |-
+  React Native Fingerprint
+summary: |
+  Fingerprints your dependency files and exports BUNDLE_HASH_STRING so consequent steps can use caches to skip building of native modules.
+description: |
+  Computes a deterministic SHA-256 **fingerprint** of the files you list (e.g. `package.json`, `package-lock.json`, `Podfile.lock`), optionally namespaced with `key_prefix`, and exports it as **`BUNDLE_HASH_STRING`**.
+
+  Use `BUNDLE_HASH_STRING` as the key for the subsequent `restore-cache` / `save-cache` steps, then gate the expensive native/bundle build on restore-cache's `BITRISE_CACHE_HIT` output so it only runs on a cache miss.
+
+  This is a lightweight, do-it-yourself pattern built entirely on free Bitrise cache steps. For a fully managed, compilation-level remote cache across Gradle, Xcode (LLVM CAS) and C++, see Bitrise Build Cache for React Native: https://bitrise.io/platform/build-cache/react-native
+
+website: https://github.com/bitrise-silver/steps-react-native-fingerprint
+source_code_url: https://github.com/bitrise-silver/steps-react-native-fingerprint
+support_url: https://github.com/bitrise-silver/steps-react-native-fingerprint/issues
+
+type_tags:
+  - utility
+
+toolkit:
+  go:
+    package_name: github.com/bitrise-silver/steps-react-native-fingerprint
+
+inputs:
+  - file_paths: |-
+      package.json
+      package-lock.json
+    opts:
+      title: "Files to fingerprint"
+      summary: Newline-separated list of files whose contents determine the cache key.
+      description: |
+        One path per line. The step reads the contents of each file and derives a single, order-independent SHA-256 fingerprint. Typical inputs are `package.json`, `package-lock.json` / `yarn.lock` / `pnpm-lock.yaml`, and native lockfiles such as `ios/Podfile.lock`. Blank lines and lines starting with `#` are ignored.
+      is_required: true
+      is_expand: true
+  - key_prefix:
+    opts:
+      title: "Cache key prefix"
+      summary: Namespace prepended to the fingerprint, e.g. "build-fingerprint" -> BUNDLE_HASH_STRING=build-fingerprint-<fingerprint>.
+      description: |
+        Optional. When set, it's prepended to the fingerprint (joined with a `-`) to form `BUNDLE_HASH_STRING`. Useful for namespacing the cache key per platform/workflow so different builds don't collide on the same key.
+      is_required: false
+      is_expand: true
+  - verbose: "false"
+    opts:
+      title: "Verbose logging"
+      summary: Log the list of files being fingerprinted.
+      value_options:
+        - "true"
+        - "false"
+      is_required: true
+
+outputs:
+  - BUNDLE_HASH_STRING:
+    opts:
+      title: "Bundle hash"
+      summary: |
+        The dependency fingerprint, prefixed with key_prefix if set. Always set. Use as the key for restore-cache / save-cache steps; gate the build on restore-cache's BITRISE_CACHE_HIT output.

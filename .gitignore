@@ -1,0 +1,20 @@
+# Compiled binary
+/steps-react-native-fingerprint
+*.exe
+*.test
+*.out
+
+# Go
+/vendor/
+/bin/
+
+# Bitrise
+.bitrise/
+.bitrise.secrets.yml
+_tmp/
+.envstore.yml
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
