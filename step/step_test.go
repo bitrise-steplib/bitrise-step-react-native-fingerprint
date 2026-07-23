@@ -1,32 +1,19 @@
 package step
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/bitrise-io/go-steputils/v2/cache/keytemplate"
 	"github.com/bitrise-io/go-steputils/v2/export"
 	"github.com/bitrise-io/go-steputils/v2/stepconf"
 	"github.com/bitrise-io/go-utils/v2/env"
 	"github.com/bitrise-io/go-utils/v2/log"
 )
 
-type fakeEvaluator struct {
-	out string
-	err error
-}
-
-func (f fakeEvaluator) Evaluate(string) (string, error) { return f.out, f.err }
-
-func realEvaluator() KeyEvaluator {
-	return keytemplate.NewModel(env.NewRepository(), log.NewLogger())
-}
-
-func newStep(ev KeyEvaluator) FingerprintStep {
-	return NewFingerprintStep(log.NewLogger(), nil, ev, export.Exporter{})
+func newStep() FingerprintStep {
+	return NewFingerprintStep(log.NewLogger(), nil, export.Exporter{})
 }
 
 func writeFile(t *testing.T, path, content string) {
@@ -42,7 +29,7 @@ func writeFile(t *testing.T, path, content string) {
 // runPaths fingerprints a project dir via the paths/ignore mechanism.
 func runPaths(t *testing.T, dir string, paths, ignore []string, prefix string) (string, error) {
 	t.Helper()
-	res, err := newStep(nil).Run(Config{ProjectDir: dir, Paths: paths, IgnorePaths: ignore, KeyPrefix: prefix})
+	res, err := newStep().Run(Config{ProjectDir: dir, Paths: paths, IgnorePaths: ignore, KeyPrefix: prefix})
 	return res.BundleHashString, err
 }
 
@@ -61,7 +48,8 @@ func TestFingerprint_DeterministicWithPrefix(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "ios", "Podfile.lock"), "PODS: []")
 	writeFile(t, filepath.Join(dir, "android", "app", "build.gradle"), "dependencies {}")
 
-	paths := []string{"package.json", "ios", "android"}
+	// Mix of a file and folders; trailing slash on folders is optional.
+	paths := []string{"package.json", "ios/", "android/"}
 	h1 := mustRunPaths(t, dir, paths, nil, "bundle")
 	h2 := mustRunPaths(t, dir, paths, nil, "bundle")
 
@@ -73,6 +61,17 @@ func TestFingerprint_DeterministicWithPrefix(t *testing.T) {
 	}
 	if got := strings.TrimPrefix(h1, "bundle-"); len(got) != 64 {
 		t.Fatalf("expected 64-char sha256, got %d (%q)", len(got), h1)
+	}
+}
+
+func TestFingerprint_FolderWithOrWithoutTrailingSlashMatch(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "android", "app", "build.gradle"), "x")
+
+	withSlash := mustRunPaths(t, dir, []string{"android/"}, nil, "")
+	noSlash := mustRunPaths(t, dir, []string{"android"}, nil, "")
+	if withSlash != noSlash {
+		t.Fatalf("trailing slash changed the result: %s != %s", withSlash, noSlash)
 	}
 }
 
@@ -164,58 +163,22 @@ func TestRun_EmptyWhenEverythingIgnoredFails(t *testing.T) {
 	}
 }
 
-func TestRun_DebugTemplateOverridesPaths(t *testing.T) {
-	// When key is set, the paths mechanism is bypassed entirely.
-	s := newStep(fakeEvaluator{out: "TEMPLATED"})
-	res, err := s.Run(Config{KeyTemplate: `{{ checksum "x" }}`, Paths: []string{"ignored"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.BundleHashString != "TEMPLATED" {
-		t.Fatalf("expected the template result, got %q", res.BundleHashString)
-	}
-}
-
-func TestRun_DebugTemplateRealChecksum(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "package.json"), `{"name":"demo"}`)
-	t.Chdir(dir)
-
-	res, err := newStep(realEvaluator()).Run(Config{KeyTemplate: `{{ checksum "package.json" }}`})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(res.BundleHashString) != 64 {
-		t.Fatalf("expected 64-char sha256, got %q", res.BundleHashString)
-	}
-}
-
-func TestRun_DebugTemplateEmptyAndErrorFail(t *testing.T) {
-	if _, err := newStep(fakeEvaluator{out: ""}).Run(Config{KeyTemplate: "x"}); err == nil {
-		t.Fatal("expected error on empty evaluated key")
-	}
-	if _, err := newStep(fakeEvaluator{err: errors.New("bad")}).Run(Config{KeyTemplate: "x"}); err == nil {
-		t.Fatal("expected the evaluator error to propagate")
-	}
-}
-
 func TestProcessConfig_ParsesListsAndDefaultsProjectDir(t *testing.T) {
 	t.Setenv("project_dir", "")
-	t.Setenv("paths", "package.json\n  ios  \n\n# comment\nandroid\n")
+	t.Setenv("paths", "package.json\n  ios/  \n\n# comment\nandroid/\n")
 	t.Setenv("ignore_paths", "ios/Pods\nandroid/build")
 	t.Setenv("key_prefix", "")
-	t.Setenv("key", "")
 	t.Setenv("verbose", "false")
 
 	parser := stepconf.NewInputParser(env.NewRepository())
-	cfg, err := NewFingerprintStep(log.NewLogger(), parser, nil, export.Exporter{}).ProcessConfig()
+	cfg, err := NewFingerprintStep(log.NewLogger(), parser, export.Exporter{}).ProcessConfig()
 	if err != nil {
 		t.Fatalf("ProcessConfig: %v", err)
 	}
 	if cfg.ProjectDir != "." {
 		t.Fatalf("project_dir default: got %q", cfg.ProjectDir)
 	}
-	if strings.Join(cfg.Paths, ",") != "package.json,ios,android" {
+	if strings.Join(cfg.Paths, ",") != "package.json,ios/,android/" {
 		t.Fatalf("paths parse: got %v", cfg.Paths)
 	}
 	if strings.Join(cfg.IgnorePaths, ",") != "ios/Pods,android/build" {

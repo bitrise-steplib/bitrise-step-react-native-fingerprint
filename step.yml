@@ -54,14 +54,19 @@ inputs:
     pnpm-lock.yaml
     app.json
     app.config.js
-    patches
-    ios
-    android
+    patches/
+    ios/
+    android/
   opts:
     title: "Paths to fingerprint"
-    summary: Newline-separated files and folders whose contents determine the key. Folders are hashed recursively; globs supported.
+    summary: Newline-separated files and folders whose contents determine the key. Folders (trailing `/`) are hashed recursively; globs supported.
     description: |
-      One entry per line, relative to `project_dir`. Each entry may be a file, a folder (hashed recursively), or a glob / `**` doublestar pattern. Missing entries are skipped with a warning. Blank lines and lines starting with `#` are ignored.
+      One entry per line, relative to `project_dir`:
+      - a **file** — e.g. `package.json`
+      - a **folder** — write it with a trailing slash, e.g. `ios/` (hashed recursively)
+      - a **glob** — a `*` / `**` doublestar pattern, e.g. `android/**/*.gradle`
+
+      The trailing slash is a readability convention — the step detects each entry's type automatically, so `ios` and `ios/` behave the same. Missing entries are skipped with a warning. Blank lines and lines starting with `#` are ignored.
 
       The default covers common React Native native inputs. Extend it with anything else that affects your native build (custom native module directories, additional lockfiles, `Gemfile.lock`, etc.).
     is_required: true
@@ -97,21 +102,6 @@ inputs:
     summary: Optional namespace prepended to the fingerprint (joined with `-`).
     description: |
       When set, it is prepended to the fingerprint to form `BUNDLE_HASH_STRING` (e.g. `ios-<fingerprint>`). Useful for namespacing the cache key per platform or workflow so different builds don't collide.
-    is_required: false
-    is_sensitive: false
-    is_expand: true
-- key:
-  opts:
-    category: Debug
-    title: "Advanced: cache key template"
-    summary: Raw cache-key template. When set, overrides paths/ignore_paths.
-    description: |
-      Advanced escape hatch. When non-empty, the `paths` / `ignore_paths` / `key_prefix` mechanism is bypassed and this template is evaluated as the key, using the same engine as the `restore-cache` / `save-cache` steps:
-      - `{{ checksum "package.json" "android/**/*.gradle" }}` — SHA-256 over files (glob / `**` supported).
-      - `{{ getenv "SOME_ENV" }}` — interpolate an environment variable.
-      - `.OS`, `.Arch`, `.Branch`, `.CommitHash`, `.Workflow` — build metadata.
-
-      Leave empty to use the default folder-based fingerprint.
     is_required: false
     is_sensitive: false
     is_expand: true

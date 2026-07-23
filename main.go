@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 
-	"github.com/bitrise-io/go-steputils/v2/cache/keytemplate"
 	"github.com/bitrise-io/go-steputils/v2/export"
 	"github.com/bitrise-io/go-steputils/v2/stepconf"
 	"github.com/bitrise-io/go-utils/v2/command"
@@ -44,9 +43,8 @@ func run() int {
 func createStep(logger log.Logger) step.FingerprintStep {
 	envRepository := env.NewRepository()
 	inputParser := stepconf.NewInputParser(envRepository)
-	keyEvaluator := keytemplate.NewModel(envRepository, logger)
 	cmdFactory := command.NewFactory(envRepository)
 	outputExporter := export.NewExporter(cmdFactory, fileutil.NewFileManager())
 
-	return step.NewFingerprintStep(logger, inputParser, keyEvaluator, outputExporter)
+	return step.NewFingerprintStep(logger, inputParser, outputExporter)
 }

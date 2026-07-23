@@ -5,9 +5,8 @@ default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
 # Each test builds a realistic React Native project layout under $TEST_DIR, runs
 # the step against it, and asserts how BUNDLE_HASH_STRING reacts to a change.
 #
-# Coverage: determinism, key_prefix namespacing, the advanced key-template
-# override, and the change factors that decide whether a cached native build is
-# reusable —
+# Coverage: determinism, key_prefix namespacing, and the change factors that
+# decide whether a cached native build is reusable —
 #   reuse:      a JS-only change, and a change to an ignored path, must NOT move
 #               the key.
 #   invalidate: a native, dependency, config, or patch change MUST move the key.
@@ -19,9 +18,9 @@ app:
       package.json
       package-lock.json
       app.json
-      patches
-      ios
-      android
+      patches/
+      ios/
+      android/
   - IGNORE: |-
       android/build
       ios/Pods
@@ -85,27 +84,6 @@ workflows:
             case "$BUNDLE_HASH_STRING" in
               ios-*) echo "PASS: prefix applied" ;;
               *) echo "FAIL: expected 'ios-' prefix"; exit 1 ;;
-            esac
-
-  test_advanced_key_template:
-    envs:
-    - PLATFORM_TAG: ios-release
-    steps:
-    - bundle::setup_rn: {}
-    - path::./:
-        title: Debug key override
-        inputs:
-        - key: "tpl-{{ getenv \"PLATFORM_TAG\" }}-{{ checksum \"$TEST_DIR/package.json\" }}"
-    - script:
-        title: Verify — template used
-        inputs:
-        - content: |-
-            #!/usr/bin/env bash
-            set -euo pipefail
-            echo "key: $BUNDLE_HASH_STRING"
-            case "$BUNDLE_HASH_STRING" in
-              tpl-ios-release-*) echo "PASS: advanced template override applied" ;;
-              *) echo "FAIL: expected 'tpl-ios-release-' prefix"; exit 1 ;;
             esac
 
   test_js_only_change_is_stable:
