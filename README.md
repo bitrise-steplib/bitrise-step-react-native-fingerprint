@@ -21,8 +21,6 @@ Use `BUNDLE_HASH_STRING` as the key for the subsequent `restore-cache` / `save-c
 
 This is a lightweight, do-it-yourself pattern built on free Bitrise cache steps. For a fully managed, compilation-level remote cache across Gradle, Xcode (LLVM CAS) and C++, see Bitrise Build Cache for React Native: https://bitrise.io/platform/build-cache/react-native
 
-Originally created by Silvercast; maintained by Bitrise.
-
 </details>
 
 ## 🧩 Get started

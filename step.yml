@@ -16,8 +16,6 @@ description: |
 
   This is a lightweight, do-it-yourself pattern built on free Bitrise cache steps. For a fully managed, compilation-level remote cache across Gradle, Xcode (LLVM CAS) and C++, see Bitrise Build Cache for React Native: https://bitrise.io/platform/build-cache/react-native
 
-  Originally created by Silvercast; maintained by Bitrise.
-
 website: https://github.com/bitrise-steplib/bitrise-step-react-native-fingerprint
 source_code_url: https://github.com/bitrise-steplib/bitrise-step-react-native-fingerprint
 support_url: https://github.com/bitrise-steplib/bitrise-step-react-native-fingerprint/issues
