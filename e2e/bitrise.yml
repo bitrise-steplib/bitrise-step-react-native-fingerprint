@@ -1,0 +1,165 @@
+format_version: "11"
+default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
+
+# This step needs no secrets: fingerprinting is pure Go with no network calls.
+
+workflows:
+  # Fingerprinting the same files twice yields the same hash.
+  test_deterministic:
+    summary: The fingerprint is deterministic across runs of identical inputs.
+    envs:
+    - TEST_DIR: _tmp_deterministic
+    steps:
+    - script:
+        title: Setup — create dependency files
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            rm -rf "$TEST_DIR"; mkdir -p "$TEST_DIR"
+            echo '{"name":"demo"}' > "$TEST_DIR/package.json"
+            echo '{"lockfileVersion":3}' > "$TEST_DIR/package-lock.json"
+    - path::./:
+        title: Execute — first run
+        inputs:
+        - file_paths: |-
+            $TEST_DIR/package.json
+            $TEST_DIR/package-lock.json
+    - script:
+        title: Save first hash
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            envman add --key HASH_1 --value "$BUNDLE_HASH_STRING"
+    - path::./:
+        title: Execute — second run
+        inputs:
+        - file_paths: |-
+            $TEST_DIR/package.json
+            $TEST_DIR/package-lock.json
+    - script:
+        title: Verify — hashes match
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            echo "run 1: $HASH_1"
+            echo "run 2: $BUNDLE_HASH_STRING"
+            [ -n "$BUNDLE_HASH_STRING" ] || { echo "FAIL: empty hash"; exit 1; }
+            [ "$HASH_1" = "$BUNDLE_HASH_STRING" ] || { echo "FAIL: fingerprint not deterministic"; exit 1; }
+            echo "PASS: deterministic"
+
+  # Changing a listed dependency file changes the fingerprint.
+  test_listed_file_change_changes_hash:
+    summary: Editing a file that is part of file_paths changes the hash.
+    envs:
+    - TEST_DIR: _tmp_listed
+    steps:
+    - script:
+        title: Setup — create dependency files
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            rm -rf "$TEST_DIR"; mkdir -p "$TEST_DIR"
+            echo '{"name":"demo","version":"1"}' > "$TEST_DIR/package.json"
+    - path::./:
+        title: Execute — before change
+        inputs:
+        - file_paths: $TEST_DIR/package.json
+    - script:
+        title: Save hash, then edit the listed file
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            envman add --key HASH_1 --value "$BUNDLE_HASH_STRING"
+            echo '{"name":"demo","version":"2"}' > "$TEST_DIR/package.json"
+    - path::./:
+        title: Execute — after change
+        inputs:
+        - file_paths: $TEST_DIR/package.json
+    - script:
+        title: Verify — hash changed
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            echo "before: $HASH_1"
+            echo "after:  $BUNDLE_HASH_STRING"
+            [ "$HASH_1" != "$BUNDLE_HASH_STRING" ] || { echo "FAIL: hash did not change on listed-file edit"; exit 1; }
+            echo "PASS: listed-file change detected"
+
+  # Changing a file NOT listed in file_paths does not change the fingerprint.
+  test_unlisted_file_change_keeps_hash:
+    summary: Editing a file outside file_paths leaves the hash unchanged.
+    envs:
+    - TEST_DIR: _tmp_unlisted
+    steps:
+    - script:
+        title: Setup — create listed and unlisted files
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            rm -rf "$TEST_DIR"; mkdir -p "$TEST_DIR"
+            echo '{"name":"demo"}' > "$TEST_DIR/package.json"
+            echo 'console.log("v1")' > "$TEST_DIR/index.js"
+    - path::./:
+        title: Execute — before change
+        inputs:
+        - file_paths: $TEST_DIR/package.json
+    - script:
+        title: Save hash, then edit the unlisted file
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            envman add --key HASH_1 --value "$BUNDLE_HASH_STRING"
+            echo 'console.log("v2")' > "$TEST_DIR/index.js"
+    - path::./:
+        title: Execute — after change
+        inputs:
+        - file_paths: $TEST_DIR/package.json
+    - script:
+        title: Verify — hash unchanged
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            echo "before: $HASH_1"
+            echo "after:  $BUNDLE_HASH_STRING"
+            [ "$HASH_1" = "$BUNDLE_HASH_STRING" ] || { echo "FAIL: hash changed on unlisted-file edit"; exit 1; }
+            echo "PASS: unlisted-file change ignored"
+
+  # key_prefix is prepended to the fingerprint.
+  test_key_prefix_applied:
+    summary: The configured key_prefix is prepended to BUNDLE_HASH_STRING.
+    envs:
+    - TEST_DIR: _tmp_prefix
+    steps:
+    - script:
+        title: Setup — create dependency file
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            rm -rf "$TEST_DIR"; mkdir -p "$TEST_DIR"
+            echo '{"name":"demo"}' > "$TEST_DIR/package.json"
+    - path::./:
+        title: Execute — with key_prefix
+        inputs:
+        - file_paths: $TEST_DIR/package.json
+        - key_prefix: build-fingerprint
+    - script:
+        title: Verify — output carries the prefix
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            echo "output: $BUNDLE_HASH_STRING"
+            case "$BUNDLE_HASH_STRING" in
+              build-fingerprint-*) echo "PASS: prefix applied" ;;
+              *) echo "FAIL: expected build-fingerprint- prefix"; exit 1 ;;
+            esac

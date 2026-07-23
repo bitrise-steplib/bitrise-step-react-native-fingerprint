@@ -1,4 +1,4 @@
-package main
+package step
 
 import (
 	"os"
@@ -51,6 +51,25 @@ func TestComputeFingerprintChangesWithContent(t *testing.T) {
 	}
 	if before == after {
 		t.Fatal("fingerprint did not change when file content changed")
+	}
+}
+
+func TestComputeFingerprintUnlistedFileDoesNotChangeHash(t *testing.T) {
+	dir := t.TempDir()
+	a := writeFile(t, dir, "package.json", `{"name":"demo"}`)
+
+	before, err := computeFingerprint([]string{a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A file that is not part of the input list must not affect the fingerprint.
+	writeFile(t, dir, "src.js", `console.log("hello")`)
+	after, err := computeFingerprint([]string{a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatal("fingerprint changed when an unlisted file was added")
 	}
 }
 

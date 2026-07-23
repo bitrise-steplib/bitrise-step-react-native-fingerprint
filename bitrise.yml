@@ -1,18 +1,54 @@
----
-format_version: "23"
+format_version: "11"
 default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
 
+include:
+- repository: steps-check
+  branch: master
+  path: steps.bitrise.yml
+
 workflows:
-  test:
-    summary: Vet, build and unit-test the step.
+  # check: included from steps-check/steps.bitrise.yml
+  # (yamlfmt, step.yml audit, README generation, golangci-lint, go test)
+
+  e2e:
+    summary: Runs every `test_`-prefixed workflow in e2e/bitrise.yml.
     steps:
-      - script@1:
-          title: go vet / build / test
-          inputs:
-            - content: |-
-                #!/usr/bin/env bash
-                set -euo pipefail
-                go version
-                go vet ./...
-                go build ./...
-                go test ./... -v
+    - git::https://github.com/bitrise-steplib/steps-check.git:
+        inputs:
+        - workflow: e2e
+
+  sample:
+    summary: Local debugging convenience — fingerprints a couple of generated files and prints the output.
+    envs:
+    - SAMPLE_DIR: _tmp
+    steps:
+    - script:
+        title: Create sample dependency files
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            rm -rf "$SAMPLE_DIR"
+            mkdir -p "$SAMPLE_DIR"
+            echo '{"name":"sample","version":"1.0.0"}' > "$SAMPLE_DIR/package.json"
+            echo '{"lockfileVersion":3}' > "$SAMPLE_DIR/package-lock.json"
+    - path::./:
+        title: React Native Fingerprint
+        inputs:
+        - file_paths: |-
+            $SAMPLE_DIR/package.json
+            $SAMPLE_DIR/package-lock.json
+        - key_prefix: build-fingerprint
+        - verbose: "true"
+    - script:
+        title: Print exported output
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            echo "BUNDLE_HASH_STRING=$BUNDLE_HASH_STRING"
+
+  generate_readme:
+    summary: Regenerates README.md from step.yml. Run manually after any step.yml change.
+    steps:
+    - git::https://github.com/bitrise-steplib/steps-readme-generator.git@main: {}

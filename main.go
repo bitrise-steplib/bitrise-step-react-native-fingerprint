@@ -1,48 +1,50 @@
 package main
 
 import (
-	"fmt"
 	"os"
 
-	"github.com/bitrise-io/go-steputils/stepconf"
-	"github.com/bitrise-io/go-steputils/tools"
+	"github.com/bitrise-io/go-steputils/v2/export"
+	"github.com/bitrise-io/go-steputils/v2/stepconf"
+	"github.com/bitrise-io/go-utils/v2/command"
+	"github.com/bitrise-io/go-utils/v2/env"
+	"github.com/bitrise-io/go-utils/v2/fileutil"
+	"github.com/bitrise-io/go-utils/v2/log"
+	"github.com/bitrise-steplib/bitrise-step-react-native-fingerprint/step"
 )
 
-// Config maps the step inputs (see step.yml) to Go fields.
-type Config struct {
-	FilePaths string `env:"file_paths,required"`
-	KeyPrefix string `env:"key_prefix"`
-	Verbose   bool   `env:"verbose"`
+func main() {
+	os.Exit(run())
 }
 
-func main() {
-	var cfg Config
-	if err := stepconf.Parse(&cfg); err != nil {
-		failf("Invalid input: %s", err)
-	}
-	stepconf.Print(cfg)
-	fmt.Println()
+func run() int {
+	logger := log.NewLogger()
+	fingerprintStep := createStep(logger)
 
-	paths := parsePaths(cfg.FilePaths)
-	if cfg.Verbose {
-		log("Fingerprinting %d file(s):", len(paths))
-		for _, p := range paths {
-			log("  - %s", p)
-		}
-	}
-
-	fingerprint, err := computeFingerprint(paths)
+	config, err := fingerprintStep.ProcessConfig()
 	if err != nil {
-		failf("Failed to compute fingerprint: %s", err)
-	}
-	hashString := withKeyPrefix(cfg.KeyPrefix, fingerprint)
-
-	if err := tools.ExportEnvironmentWithEnvman("BUNDLE_HASH_STRING", hashString); err != nil {
-		failf("Failed to export BUNDLE_HASH_STRING: %s", err)
+		logger.Errorf("Process config: %s", err)
+		return 1
 	}
 
-	fmt.Println()
-	log("Exported BUNDLE_HASH_STRING=%s", hashString)
-	log("Use it as the restore-cache / save-cache key; gate the build on restore-cache's BITRISE_CACHE_HIT.")
-	os.Exit(0)
+	result, err := fingerprintStep.Run(config)
+	if err != nil {
+		logger.Errorf("Run: %s", err)
+		return 1
+	}
+
+	if err := fingerprintStep.ExportOutputs(result); err != nil {
+		logger.Errorf("Export outputs: %s", err)
+		return 1
+	}
+
+	return 0
+}
+
+func createStep(logger log.Logger) step.FingerprintStep {
+	envRepository := env.NewRepository()
+	inputParser := stepconf.NewInputParser(envRepository)
+	cmdFactory := command.NewFactory(envRepository)
+	outputExporter := export.NewExporter(cmdFactory, fileutil.NewFileManager())
+
+	return step.NewFingerprintStep(logger, inputParser, outputExporter)
 }
