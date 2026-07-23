@@ -9,6 +9,7 @@ require (
 
 require (
 	github.com/bitrise-io/go-utils v1.0.13 // indirect
+	github.com/bmatcuk/doublestar/v4 v4.6.1 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-retryablehttp v0.7.7 // indirect
 )

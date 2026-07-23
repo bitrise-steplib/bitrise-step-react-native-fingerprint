@@ -12,16 +12,13 @@ const bundleHashStringKey = "BUNDLE_HASH_STRING"
 
 // Input maps the step inputs (see step.yml) to Go fields.
 type Input struct {
-	FilePaths string `env:"file_paths,required"`
-	KeyPrefix string `env:"key_prefix"`
-	Verbose   bool   `env:"verbose"`
+	Key     string `env:"key,required"`
+	Verbose bool   `env:"verbose"`
 }
 
 // Config is the processed and validated configuration derived from Input.
 type Config struct {
-	FilePaths []string
-	KeyPrefix string
-	Verbose   bool
+	Key string
 }
 
 // Result holds the step's computed output.
@@ -29,19 +26,29 @@ type Result struct {
 	BundleHashString string
 }
 
-// FingerprintStep computes a deterministic fingerprint of dependency files and
-// exports it as BUNDLE_HASH_STRING.
+// KeyEvaluator evaluates a Bitrise cache-key template — the same syntax the
+// restore-cache / save-cache steps accept, e.g. `{{ checksum "package.json" }}`,
+// `{{ getenv "X" }}`, and the `.OS` / `.Arch` / `.Branch` variables.
+// It is satisfied by go-steputils/v2/cache/keytemplate.Model.
+type KeyEvaluator interface {
+	Evaluate(key string) (string, error)
+}
+
+// FingerprintStep evaluates a cache-key template and exports the result as
+// BUNDLE_HASH_STRING for subsequent cache and build-gating steps.
 type FingerprintStep struct {
 	logger         log.Logger
 	inputParser    stepconf.InputParser
+	keyEvaluator   KeyEvaluator
 	outputExporter export.Exporter
 }
 
 // NewFingerprintStep wires the step with its dependencies.
-func NewFingerprintStep(logger log.Logger, inputParser stepconf.InputParser, outputExporter export.Exporter) FingerprintStep {
+func NewFingerprintStep(logger log.Logger, inputParser stepconf.InputParser, keyEvaluator KeyEvaluator, outputExporter export.Exporter) FingerprintStep {
 	return FingerprintStep{
 		logger:         logger,
 		inputParser:    inputParser,
+		keyEvaluator:   keyEvaluator,
 		outputExporter: outputExporter,
 	}
 }
@@ -55,33 +62,28 @@ func (s FingerprintStep) ProcessConfig() (Config, error) {
 	stepconf.Print(input)
 	s.logger.Println()
 
-	paths := parsePaths(input.FilePaths)
-	if len(paths) == 0 {
-		return Config{}, fmt.Errorf("no file paths provided in 'file_paths' (all lines were blank or comments)")
-	}
+	// keytemplate logs the files that feed each checksum at debug level.
+	s.logger.EnableDebugLog(input.Verbose)
 
-	return Config{
-		FilePaths: paths,
-		KeyPrefix: input.KeyPrefix,
-		Verbose:   input.Verbose,
-	}, nil
+	return Config{Key: input.Key}, nil
 }
 
-// Run computes the fingerprint and applies the optional key prefix.
+// Run evaluates the key template into the final fingerprint string.
 func (s FingerprintStep) Run(config Config) (Result, error) {
-	if config.Verbose {
-		s.logger.Printf("Fingerprinting %d file(s):", len(config.FilePaths))
-		for _, p := range config.FilePaths {
-			s.logger.Printf("  - %s", p)
-		}
-	}
-
-	fingerprint, err := computeFingerprint(config.FilePaths)
+	hashString, err := s.keyEvaluator.Evaluate(config.Key)
 	if err != nil {
-		return Result{}, fmt.Errorf("compute fingerprint: %w", err)
+		return Result{}, fmt.Errorf("evaluate key template %q: %w", config.Key, err)
 	}
 
-	return Result{BundleHashString: withKeyPrefix(config.KeyPrefix, fingerprint)}, nil
+	// keytemplate degrades to an empty string (with warnings) when, for example,
+	// a checksum matches no files. An empty cache key would silently collide
+	// across builds — and repacking onto the wrong cached binary ships a broken
+	// build — so we fail loudly instead.
+	if hashString == "" {
+		return Result{}, fmt.Errorf("evaluated key is empty — check that the files referenced in 'key' exist and any glob patterns match at least one file")
+	}
+
+	return Result{BundleHashString: hashString}, nil
 }
 
 // ExportOutputs writes BUNDLE_HASH_STRING via envman for subsequent steps.

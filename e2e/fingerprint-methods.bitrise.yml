@@ -4,13 +4,13 @@ default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
 # ─────────────────────────────────────────────────────────────────────────────
 # Fingerprint METHOD validation (decision-support, not a code-correctness gate)
 #
-# Compares two choices of `file_paths` against the SAME step, over a realistic
-# React Native project layout, to answer: "does this fingerprint capture the
-# inputs that actually determine whether the compiled native app is reusable?"
+# Compares two `key` templates against the SAME step, over a realistic React
+# Native layout, to answer: "does this fingerprint capture the inputs that
+# actually determine whether the compiled native app is reusable?"
 #
-#   CURRENT  (naive, the step's shipped default): package.json + lockfile only
-#   PROPOSED (native-aware, per the blog draft + Expo fingerprint): also app.json
-#            and native project files (ios/Podfile.lock, android/*.gradle, ...)
+#   CURRENT  (naive, the step's OLD default): package.json + lockfile only
+#   PROPOSED (native-aware, the step's NEW default): also app.json + native
+#            project files, using a doublestar glob for Gradle files
 #
 # The pipeline this feeds is: fingerprint -> restore-cache -> repack JS + resign.
 # A false cache HIT (fingerprint unchanged when native inputs changed) means
@@ -23,17 +23,8 @@ default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
 
 app:
   envs:
-  - NAIVE_PATHS: |-
-      _tmp_methods/package.json
-      _tmp_methods/package-lock.json
-  - PROPOSED_PATHS: |-
-      _tmp_methods/package.json
-      _tmp_methods/package-lock.json
-      _tmp_methods/app.json
-      _tmp_methods/ios/Podfile.lock
-      _tmp_methods/android/build.gradle
-      _tmp_methods/android/app/build.gradle
-      _tmp_methods/android/gradle.properties
+  - NAIVE_KEY: "{{ checksum \"_tmp_methods/package.json\" \"_tmp_methods/package-lock.json\" }}"
+  - PROPOSED_KEY: "{{ checksum \"_tmp_methods/package.json\" \"_tmp_methods/package-lock.json\" \"_tmp_methods/app.json\" \"_tmp_methods/ios/Podfile.lock\" \"_tmp_methods/android/**/*.gradle\" \"_tmp_methods/android/gradle.properties\" }}"
 
 step_bundles:
   # Creates a realistic RN project under _tmp_methods/ and writes shell helpers.
@@ -82,7 +73,7 @@ workflows:
     - path::./:
         title: CURRENT — before
         inputs:
-        - file_paths: $NAIVE_PATHS
+        - key: $NAIVE_KEY
     - script:
         title: save NAIVE_BEFORE
         inputs:
@@ -90,7 +81,7 @@ workflows:
     - path::./:
         title: PROPOSED — before
         inputs:
-        - file_paths: $PROPOSED_PATHS
+        - key: $PROPOSED_KEY
     - script:
         title: save PROPOSED_BEFORE
         inputs:
@@ -105,7 +96,7 @@ workflows:
     - path::./:
         title: CURRENT — after
         inputs:
-        - file_paths: $NAIVE_PATHS
+        - key: $NAIVE_KEY
     - script:
         title: save NAIVE_AFTER
         inputs:
@@ -113,7 +104,7 @@ workflows:
     - path::./:
         title: PROPOSED — after
         inputs:
-        - file_paths: $PROPOSED_PATHS
+        - key: $PROPOSED_KEY
     - script:
         title: save PROPOSED_AFTER
         inputs:
@@ -139,7 +130,7 @@ workflows:
     - path::./:
         title: CURRENT — before
         inputs:
-        - file_paths: $NAIVE_PATHS
+        - key: $NAIVE_KEY
     - script:
         title: save NAIVE_BEFORE
         inputs:
@@ -147,24 +138,26 @@ workflows:
     - path::./:
         title: PROPOSED — before
         inputs:
-        - file_paths: $PROPOSED_PATHS
+        - key: $PROPOSED_KEY
     - script:
         title: save PROPOSED_BEFORE
         inputs:
         - content: envman add --key PROPOSED_BEFORE --value "$BUNDLE_HASH_STRING"
     - script:
-        title: Mutate — bump a native dependency (Podfile.lock) and a Gradle file
+        title: Mutate — bump a native dep (Podfile.lock), edit gradle, add a native module
         inputs:
         - content: |-
             #!/usr/bin/env bash
             set -euo pipefail
-            # a pod version bump / native module change — no package.json change
+            # native-only changes — no package.json / lockfile change
             printf '  - RNScreens (4.0.0)\n' >> _tmp_methods/ios/Podfile.lock
             printf 'android.enableNativeThing=true\n' >> _tmp_methods/android/gradle.properties
+            mkdir -p _tmp_methods/android/newmodule
+            echo 'dependencies {}' > _tmp_methods/android/newmodule/build.gradle
     - path::./:
         title: CURRENT — after
         inputs:
-        - file_paths: $NAIVE_PATHS
+        - key: $NAIVE_KEY
     - script:
         title: save NAIVE_AFTER
         inputs:
@@ -172,7 +165,7 @@ workflows:
     - path::./:
         title: PROPOSED — after
         inputs:
-        - file_paths: $PROPOSED_PATHS
+        - key: $PROPOSED_KEY
     - script:
         title: save PROPOSED_AFTER
         inputs:
@@ -184,14 +177,14 @@ workflows:
             #!/usr/bin/env bash
             set -euo pipefail
             source _tmp_methods/_report.sh
-            report "Native-only change (Podfile.lock + gradle.properties)"
+            report "Native-only change (Podfile.lock + gradle + new native module)"
             # The naive default does NOT include native files, so it cannot see the
             # change. This is the exact false-hit -> stale-binary risk we validate.
             expect_same  "CURRENT (blind spot)" "$NAIVE_BEFORE"    "$NAIVE_AFTER"
             expect_diff  "PROPOSED"             "$PROPOSED_BEFORE" "$PROPOSED_AFTER"
             echo "PASS: proposed method catches the native change the naive default misses"
 
-  # Dependency change: BOTH methods should change (lockfile is in both lists).
+  # Dependency change: BOTH methods should change (lockfile is in both keys).
   test_method_dependency_change_both_detect:
     summary: A JS-dependency change must change both fingerprints.
     steps:
@@ -199,7 +192,7 @@ workflows:
     - path::./:
         title: CURRENT — before
         inputs:
-        - file_paths: $NAIVE_PATHS
+        - key: $NAIVE_KEY
     - script:
         title: save NAIVE_BEFORE
         inputs:
@@ -207,7 +200,7 @@ workflows:
     - path::./:
         title: PROPOSED — before
         inputs:
-        - file_paths: $PROPOSED_PATHS
+        - key: $PROPOSED_KEY
     - script:
         title: save PROPOSED_BEFORE
         inputs:
@@ -222,7 +215,7 @@ workflows:
     - path::./:
         title: CURRENT — after
         inputs:
-        - file_paths: $NAIVE_PATHS
+        - key: $NAIVE_KEY
     - script:
         title: save NAIVE_AFTER
         inputs:
@@ -230,7 +223,7 @@ workflows:
     - path::./:
         title: PROPOSED — after
         inputs:
-        - file_paths: $PROPOSED_PATHS
+        - key: $PROPOSED_KEY
     - script:
         title: save PROPOSED_AFTER
         inputs:

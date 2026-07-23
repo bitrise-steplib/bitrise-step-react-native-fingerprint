@@ -18,27 +18,26 @@ workflows:
         - workflow: e2e
 
   sample:
-    summary: Local debugging convenience — fingerprints a couple of generated files and prints the output.
+    summary: Local debugging convenience — evaluates a key template over generated files and prints the output.
     envs:
     - SAMPLE_DIR: _tmp
     steps:
     - script:
-        title: Create sample dependency files
+        title: Create sample native inputs
         inputs:
         - content: |-
             #!/usr/bin/env bash
             set -euo pipefail
             rm -rf "$SAMPLE_DIR"
-            mkdir -p "$SAMPLE_DIR"
+            mkdir -p "$SAMPLE_DIR/android/app" "$SAMPLE_DIR/ios"
             echo '{"name":"sample","version":"1.0.0"}' > "$SAMPLE_DIR/package.json"
             echo '{"lockfileVersion":3}' > "$SAMPLE_DIR/package-lock.json"
+            echo 'PODS: []' > "$SAMPLE_DIR/ios/Podfile.lock"
+            echo 'dependencies {}' > "$SAMPLE_DIR/android/app/build.gradle"
     - path::./:
         title: React Native Fingerprint
         inputs:
-        - file_paths: |-
-            $SAMPLE_DIR/package.json
-            $SAMPLE_DIR/package-lock.json
-        - key_prefix: build-fingerprint
+        - key: "build-fingerprint-{{ checksum \"$SAMPLE_DIR/package.json\" \"$SAMPLE_DIR/package-lock.json\" \"$SAMPLE_DIR/ios/Podfile.lock\" \"$SAMPLE_DIR/android/**/*.gradle\" }}"
         - verbose: "true"
     - script:
         title: Print exported output
