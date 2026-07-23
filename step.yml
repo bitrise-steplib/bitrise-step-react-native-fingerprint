@@ -39,7 +39,7 @@ toolkit:
     package_name: github.com/bitrise-steplib/bitrise-step-react-native-fingerprint
 
 inputs:
-- key: "{{ checksum \"package.json\" \"package-lock.json\" \"yarn.lock\" \"pnpm-lock.yaml\" \"app.json\" \"app.config.js\" \"ios/Podfile.lock\" \"android/**/*.gradle\" \"android/gradle.properties\" }}"
+- key: "{{ checksum \"package.json\" \"package-lock.json\" \"yarn.lock\" \"pnpm-lock.yaml\" \"app.json\" \"app.config.js\" \"patches/**/*\" \"ios/Podfile.lock\" \"android/**/*.gradle\" \"android/gradle.properties\" }}"
   opts:
     title: "Cache key template"
     summary: The key template to evaluate into BUNDLE_HASH_STRING. Same syntax as restore-cache / save-cache.
@@ -51,7 +51,7 @@ inputs:
       - `{{ getenv "<ENV>" }}` — value of an environment variable.
       - `.OS`, `.Arch`, `.Branch`, `.CommitHash`, `.Workflow` — build metadata, e.g. `{{ .OS }}-{{ .Arch }}-{{ checksum "package.json" }}`.
 
-      The default fingerprints common React Native native inputs (JS lockfiles, `app.json` / `app.config.js`, `ios/Podfile.lock`, Android Gradle files). Deliberately excludes your JavaScript source, so a JS-only change reuses the cached native build. Extend it to cover anything else that affects your native build (config plugins, `patches/`, additional native lockfiles). The step fails if the template evaluates to an empty string.
+      The default fingerprints common React Native native inputs (JS lockfiles, `app.json` / `app.config.js`, `patch-package` patches under `patches/`, `ios/Podfile.lock`, Android Gradle files). Deliberately excludes your JavaScript source, so a JS-only change reuses the cached native build. Extend it to cover anything else that affects your native build (Expo config plugins, additional native lockfiles). The step fails if the template evaluates to an empty string.
     is_required: true
     is_sensitive: false
     is_expand: true
