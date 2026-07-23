@@ -31,7 +31,7 @@ app:
   # This step's default key, scoped to the cloned app dir (managed Expo app has
   # no ios/android dirs, so those globs are skipped; package.json/lock/app.json
   # drive the result).
-  - OUR_KEY: "{{ checksum \"_tmp_expo/package.json\" \"_tmp_expo/package-lock.json\" \"_tmp_expo/yarn.lock\" \"_tmp_expo/pnpm-lock.yaml\" \"_tmp_expo/app.json\" \"_tmp_expo/app.config.js\" \"_tmp_expo/ios/Podfile.lock\" \"_tmp_expo/android/**/*.gradle\" \"_tmp_expo/android/gradle.properties\" }}"
+  - OUR_KEY: "{{ checksum \"_tmp_expo/package.json\" \"_tmp_expo/package-lock.json\" \"_tmp_expo/yarn.lock\" \"_tmp_expo/pnpm-lock.yaml\" \"_tmp_expo/app.json\" \"_tmp_expo/app.config.js\" \"_tmp_expo/patches/**/*\" \"_tmp_expo/ios/Podfile.lock\" \"_tmp_expo/android/**/*.gradle\" \"_tmp_expo/android/gradle.properties\" }}"
 
 workflows:
   test_compare_expo_vs_ours:
@@ -160,6 +160,32 @@ workflows:
             envman add --key OURS_DEP --value "$BUNDLE_HASH_STRING"
             envman add --key EXPO_DEP --value "$( cd "$APP_DIR" && node _expo_hash.js )"
 
+    # ── Scenario 4: patch-package patch added (patches/) ──
+    # Expo hashes patch-package patches; whether OURS catches it depends on the
+    # default key including patches/. A patch can modify native code, so missing
+    # it is a real (dangerous) gap.
+    - script:
+        title: "Scenario PATCH — add a patch-package patch"
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            git -C "$APP_DIR" checkout -- .
+            rm -rf "$APP_DIR/patches"; mkdir -p "$APP_DIR/patches"
+            printf '%s\n' 'diff --git a/node_modules/react-native/x b/node_modules/react-native/x' '--- a/x' '+++ b/x' '@@ -1 +1 @@' '-old' '+new' > "$APP_DIR/patches/react-native+0.72.0.patch"
+    - path::./:
+        title: OURS — after patch add
+        inputs:
+        - key: $OUR_KEY
+    - script:
+        title: save OURS_PATCH + EXPO_PATCH
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            envman add --key OURS_PATCH --value "$BUNDLE_HASH_STRING"
+            envman add --key EXPO_PATCH --value "$( cd "$APP_DIR" && node _expo_hash.js )"
+
     - script:
         title: Report — compare change-detection
         inputs:
@@ -170,9 +196,10 @@ workflows:
             echo
             echo "==== fingerprint comparison (vs baseline) ===="
             echo "baseline: ours=$OURS_BASE  expo=$EXPO_BASE"
-            row "JS-only edit"        "$OURS_BASE" "$OURS_JS"  "$EXPO_BASE" "$EXPO_JS"
-            row "config change"       "$OURS_BASE" "$OURS_CFG" "$EXPO_BASE" "$EXPO_CFG"
-            row "pure-JS dependency"  "$OURS_BASE" "$OURS_DEP" "$EXPO_BASE" "$EXPO_DEP"
+            row "JS-only edit"        "$OURS_BASE" "$OURS_JS"    "$EXPO_BASE" "$EXPO_JS"
+            row "config change"       "$OURS_BASE" "$OURS_CFG"   "$EXPO_BASE" "$EXPO_CFG"
+            row "pure-JS dependency"  "$OURS_BASE" "$OURS_DEP"   "$EXPO_BASE" "$EXPO_DEP"
+            row "patch-package"       "$OURS_BASE" "$OURS_PATCH" "$EXPO_BASE" "$EXPO_PATCH"
             echo
             if [ "$DANGER" -ne 0 ]; then
               echo "FAIL: ours missed a change Expo detected (dangerous false cache hit)"; exit 1

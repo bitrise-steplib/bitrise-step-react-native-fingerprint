@@ -26,7 +26,7 @@ app:
   - SILVER_REPO: https://github.com/bitrise-silver/steps-react-native-fingerprint.git
   - APP_DIR: _tmp_bare
   - SILVER_DIR: _tmp_silver_step
-  - OUR_KEY: "{{ checksum \"_tmp_bare/package.json\" \"_tmp_bare/package-lock.json\" \"_tmp_bare/yarn.lock\" \"_tmp_bare/pnpm-lock.yaml\" \"_tmp_bare/app.json\" \"_tmp_bare/app.config.js\" \"_tmp_bare/ios/Podfile.lock\" \"_tmp_bare/android/**/*.gradle\" \"_tmp_bare/android/gradle.properties\" }}"
+  - OUR_KEY: "{{ checksum \"_tmp_bare/package.json\" \"_tmp_bare/package-lock.json\" \"_tmp_bare/yarn.lock\" \"_tmp_bare/pnpm-lock.yaml\" \"_tmp_bare/app.json\" \"_tmp_bare/app.config.js\" \"_tmp_bare/patches/**/*\" \"_tmp_bare/ios/Podfile.lock\" \"_tmp_bare/android/**/*.gradle\" \"_tmp_bare/android/gradle.properties\" }}"
 
 workflows:
   test_bare_rn_native_globs:
