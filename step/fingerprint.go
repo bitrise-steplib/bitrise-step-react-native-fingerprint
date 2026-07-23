@@ -45,6 +45,8 @@ func withKeyPrefix(prefix, fingerprint string) string {
 // fsys-relative path (so the digest is independent of where the project is
 // checked out) bound to its own content hash.
 func fingerprintPaths(fsys fs.FS, paths, ignore []string, logger log.Logger) (string, error) {
+	ignore = normalizePatterns(ignore) // normalize once, not per walked entry
+
 	seen := map[string]bool{}
 	var rels []string
 	for _, p := range paths {
@@ -127,11 +129,20 @@ func collect(fsys fs.FS, root string, ignore []string, logger log.Logger) []stri
 	return out
 }
 
-// isIgnored reports whether the fsys-relative path matches any ignore pattern,
-// either as a doublestar glob or as a directory prefix.
+// normalizePatterns cleans each pattern to a slash path once, so matching does
+// not repeat the work for every walked entry.
+func normalizePatterns(patterns []string) []string {
+	out := make([]string, len(patterns))
+	for i, p := range patterns {
+		out[i] = path.Clean(filepath.ToSlash(p))
+	}
+	return out
+}
+
+// isIgnored reports whether the fsys-relative path matches any (already
+// normalized) ignore pattern, as a doublestar glob or a directory prefix.
 func isIgnored(rel string, ignore []string) bool {
 	for _, pat := range ignore {
-		pat = path.Clean(filepath.ToSlash(pat))
 		if ok, _ := doublestar.Match(pat, rel); ok {
 			return true
 		}
