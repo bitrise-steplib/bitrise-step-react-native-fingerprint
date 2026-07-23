@@ -1,150 +1,78 @@
 format_version: "11"
 default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
 
-# This step needs no secrets: fingerprinting is pure file hashing, no network calls.
+# Self-contained e2e suite: no secrets, no network, no external tools.
+# Each test builds a realistic React Native project layout, runs the step, and
+# asserts how the exported BUNDLE_HASH_STRING reacts to a given change.
+#
+# Coverage: determinism, template features (getenv + literal prefix), and the
+# change factors that decide whether a cached native build is reusable —
+#   reuse:      a JS-only change must NOT move the key.
+#   invalidate: a native, dependency, config, or patch change MUST move the key.
+
+app:
+  envs:
+  - TEST_DIR: _tmp_e2e
+  # A native-aware key mirroring the step's default, scoped to the test project.
+  - KEY: "{{ checksum \"_tmp_e2e/package.json\" \"_tmp_e2e/package-lock.json\" \"_tmp_e2e/yarn.lock\" \"_tmp_e2e/pnpm-lock.yaml\" \"_tmp_e2e/app.json\" \"_tmp_e2e/app.config.js\" \"_tmp_e2e/patches/**/*\" \"_tmp_e2e/ios/Podfile.lock\" \"_tmp_e2e/android/**/*.gradle\" \"_tmp_e2e/android/gradle.properties\" }}"
+
+step_bundles:
+  # Creates a realistic RN project under $TEST_DIR (with native, config, patch).
+  setup_rn:
+    steps:
+    - script:
+        title: Setup — create a realistic RN project
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            D="$TEST_DIR"
+            rm -rf "$D"
+            mkdir -p "$D/ios" "$D/android/app" "$D/patches"
+            printf '{"name":"rn-demo","dependencies":{"react-native":"0.76.0"}}\n' > "$D/package.json"
+            printf '{"lockfileVersion":3}\n'                       > "$D/package-lock.json"
+            printf '{"name":"rn-demo","displayName":"RN Demo"}\n'  > "$D/app.json"
+            printf 'export default function App(){ return null; }\n' > "$D/App.tsx"
+            printf 'diff --git a b\n-old\n+new\n'                  > "$D/patches/react-native+0.76.0.patch"
+            printf 'PODS:\n  - React (0.76.0)\n'                   > "$D/ios/Podfile.lock"
+            printf 'buildscript { ext { minSdkVersion = 24 } }\n'  > "$D/android/build.gradle"
+            printf 'dependencies {}\n'                             > "$D/android/app/build.gradle"
+            printf 'org.gradle.jvmargs=-Xmx2g\n'                   > "$D/android/gradle.properties"
 
 workflows:
-  # Evaluating the same key template twice over identical files yields the same result.
+  # The evaluated key is deterministic across runs of identical inputs.
   test_deterministic:
-    summary: The evaluated key is deterministic across runs of identical inputs.
-    envs:
-    - TEST_DIR: _tmp_deterministic
     steps:
+    - bundle::setup_rn: {}
+    - path::./:
+        title: first run
+        inputs:
+        - key: $KEY
     - script:
-        title: Setup — create dependency files
+        inputs:
+        - content: envman add --key H1 --value "$BUNDLE_HASH_STRING"
+    - path::./:
+        title: second run
+        inputs:
+        - key: $KEY
+    - script:
+        title: Verify — identical
         inputs:
         - content: |-
             #!/usr/bin/env bash
             set -euo pipefail
-            rm -rf "$TEST_DIR"; mkdir -p "$TEST_DIR"
-            echo '{"name":"demo"}' > "$TEST_DIR/package.json"
-            echo '{"lockfileVersion":3}' > "$TEST_DIR/package-lock.json"
-    - path::./:
-        title: Execute — first run
-        inputs:
-        - key: "{{ checksum \"$TEST_DIR/package.json\" \"$TEST_DIR/package-lock.json\" }}"
-    - script:
-        title: Save first hash
-        inputs:
-        - content: envman add --key HASH_1 --value "$BUNDLE_HASH_STRING"
-    - path::./:
-        title: Execute — second run
-        inputs:
-        - key: "{{ checksum \"$TEST_DIR/package.json\" \"$TEST_DIR/package-lock.json\" }}"
-    - script:
-        title: Verify — hashes match
-        inputs:
-        - content: |-
-            #!/usr/bin/env bash
-            set -euo pipefail
-            echo "run 1: $HASH_1"
-            echo "run 2: $BUNDLE_HASH_STRING"
-            [ -n "$BUNDLE_HASH_STRING" ] || { echo "FAIL: empty hash"; exit 1; }
-            [ "$HASH_1" = "$BUNDLE_HASH_STRING" ] || { echo "FAIL: not deterministic"; exit 1; }
+            [ -n "$BUNDLE_HASH_STRING" ] || { echo "FAIL: empty key"; exit 1; }
+            [ "$H1" = "$BUNDLE_HASH_STRING" ] || { echo "FAIL: not deterministic ($H1 != $BUNDLE_HASH_STRING)"; exit 1; }
             echo "PASS: deterministic"
 
-  # Changing a checksummed file changes the evaluated key.
-  test_checksum_change_changes_hash:
-    summary: Editing a file referenced by checksum changes the key.
+  # Template features: literal prefix + getenv + checksum combine into the key.
+  test_template_features:
     envs:
-    - TEST_DIR: _tmp_checksum
-    steps:
-    - script:
-        title: Setup — create dependency file
-        inputs:
-        - content: |-
-            #!/usr/bin/env bash
-            set -euo pipefail
-            rm -rf "$TEST_DIR"; mkdir -p "$TEST_DIR"
-            echo '{"name":"demo","version":"1"}' > "$TEST_DIR/package.json"
-    - path::./:
-        title: Execute — before change
-        inputs:
-        - key: "{{ checksum \"$TEST_DIR/package.json\" }}"
-    - script:
-        title: Save hash, then edit the file
-        inputs:
-        - content: |-
-            #!/usr/bin/env bash
-            set -euo pipefail
-            envman add --key HASH_1 --value "$BUNDLE_HASH_STRING"
-            echo '{"name":"demo","version":"2"}' > "$TEST_DIR/package.json"
-    - path::./:
-        title: Execute — after change
-        inputs:
-        - key: "{{ checksum \"$TEST_DIR/package.json\" }}"
-    - script:
-        title: Verify — hash changed
-        inputs:
-        - content: |-
-            #!/usr/bin/env bash
-            set -euo pipefail
-            echo "before: $HASH_1"
-            echo "after:  $BUNDLE_HASH_STRING"
-            [ "$HASH_1" != "$BUNDLE_HASH_STRING" ] || { echo "FAIL: hash did not change"; exit 1; }
-            echo "PASS: checksum change detected"
-
-  # Glob / doublestar patterns match nested files and detect newly added ones.
-  test_glob_matches_nested_files:
-    summary: A `**` glob hashes nested files and reacts to new matches.
-    envs:
-    - TEST_DIR: _tmp_glob
-    steps:
-    - script:
-        title: Setup — create nested Gradle files
-        inputs:
-        - content: |-
-            #!/usr/bin/env bash
-            set -euo pipefail
-            rm -rf "$TEST_DIR"; mkdir -p "$TEST_DIR/android/app"
-            echo 'buildscript {}' > "$TEST_DIR/android/build.gradle"
-            echo 'dependencies {}' > "$TEST_DIR/android/app/build.gradle"
-    - path::./:
-        title: Execute — before adding a file
-        inputs:
-        - key: "{{ checksum \"$TEST_DIR/android/**/*.gradle\" }}"
-    - script:
-        title: Save hash, then add a new nested match
-        inputs:
-        - content: |-
-            #!/usr/bin/env bash
-            set -euo pipefail
-            envman add --key HASH_1 --value "$BUNDLE_HASH_STRING"
-            mkdir -p "$TEST_DIR/android/feature"
-            echo '// new module' > "$TEST_DIR/android/feature/build.gradle"
-    - path::./:
-        title: Execute — after adding a file
-        inputs:
-        - key: "{{ checksum \"$TEST_DIR/android/**/*.gradle\" }}"
-    - script:
-        title: Verify — glob picked up the new file
-        inputs:
-        - content: |-
-            #!/usr/bin/env bash
-            set -euo pipefail
-            echo "before: $HASH_1"
-            echo "after:  $BUNDLE_HASH_STRING"
-            [ -n "$HASH_1" ] || { echo "FAIL: glob matched nothing"; exit 1; }
-            [ "$HASH_1" != "$BUNDLE_HASH_STRING" ] || { echo "FAIL: new nested file not detected"; exit 1; }
-            echo "PASS: glob detects nested + new files"
-
-  # getenv interpolation and literal prefixes are preserved in the key.
-  test_getenv_and_literal_prefix:
-    summary: The key template can combine a literal prefix, getenv, and checksum.
-    envs:
-    - TEST_DIR: _tmp_getenv
     - PLATFORM_TAG: ios-release
     steps:
-    - script:
-        title: Setup — create dependency file
-        inputs:
-        - content: |-
-            #!/usr/bin/env bash
-            set -euo pipefail
-            rm -rf "$TEST_DIR"; mkdir -p "$TEST_DIR"
-            echo '{"name":"demo"}' > "$TEST_DIR/package.json"
+    - bundle::setup_rn: {}
     - path::./:
-        title: Execute — prefix + getenv + checksum
+        title: prefix + getenv + checksum
         inputs:
         - key: "bundle-{{ getenv \"PLATFORM_TAG\" }}-{{ checksum \"$TEST_DIR/package.json\" }}"
     - script:
@@ -153,8 +81,157 @@ workflows:
         - content: |-
             #!/usr/bin/env bash
             set -euo pipefail
-            echo "output: $BUNDLE_HASH_STRING"
+            echo "key: $BUNDLE_HASH_STRING"
             case "$BUNDLE_HASH_STRING" in
               bundle-ios-release-*) echo "PASS: prefix + getenv applied" ;;
               *) echo "FAIL: expected 'bundle-ios-release-' prefix"; exit 1 ;;
             esac
+
+  # Reuse: a JS-only change must NOT move the key (cached native build is valid).
+  test_js_only_change_is_stable:
+    steps:
+    - bundle::setup_rn: {}
+    - path::./:
+        inputs:
+        - key: $KEY
+    - script:
+        inputs:
+        - content: envman add --key H1 --value "$BUNDLE_HASH_STRING"
+    - script:
+        title: Change — edit JS and add an unlisted JS file
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            printf '\n// edited\n' >> "$TEST_DIR/App.tsx"
+            echo 'export const x = 1;' > "$TEST_DIR/src_new.js"
+    - path::./:
+        inputs:
+        - key: $KEY
+    - script:
+        title: Verify — key unchanged
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            [ "$H1" = "$BUNDLE_HASH_STRING" ] || { echo "FAIL: JS-only change moved the key"; exit 1; }
+            echo "PASS: JS-only change reuses the cached build"
+
+  # Invalidate: a dependency (lockfile) change must move the key.
+  test_dependency_change_invalidates:
+    steps:
+    - bundle::setup_rn: {}
+    - path::./:
+        inputs:
+        - key: $KEY
+    - script:
+        inputs:
+        - content: envman add --key H1 --value "$BUNDLE_HASH_STRING"
+    - script:
+        title: Change — edit the lockfile
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            echo '{"lockfileVersion":3,"packages":{"changed":true}}' > "$TEST_DIR/package-lock.json"
+    - path::./:
+        inputs:
+        - key: $KEY
+    - script:
+        title: Verify — key changed
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            [ "$H1" != "$BUNDLE_HASH_STRING" ] || { echo "FAIL: dependency change not detected"; exit 1; }
+            echo "PASS: dependency change invalidates"
+
+  # Invalidate: an app config (app.json) change must move the key.
+  test_config_change_invalidates:
+    steps:
+    - bundle::setup_rn: {}
+    - path::./:
+        inputs:
+        - key: $KEY
+    - script:
+        inputs:
+        - content: envman add --key H1 --value "$BUNDLE_HASH_STRING"
+    - script:
+        title: Change — edit app.json
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            echo '{"name":"rn-demo","displayName":"RN Demo v2"}' > "$TEST_DIR/app.json"
+    - path::./:
+        inputs:
+        - key: $KEY
+    - script:
+        title: Verify — key changed
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            [ "$H1" != "$BUNDLE_HASH_STRING" ] || { echo "FAIL: config change not detected"; exit 1; }
+            echo "PASS: config change invalidates"
+
+  # Invalidate: a native change (Podfile.lock + a new nested Gradle file) must
+  # move the key. Also exercises the `**` doublestar glob picking up new files.
+  test_native_change_invalidates:
+    steps:
+    - bundle::setup_rn: {}
+    - path::./:
+        inputs:
+        - key: $KEY
+    - script:
+        inputs:
+        - content: envman add --key H1 --value "$BUNDLE_HASH_STRING"
+    - script:
+        title: Change — edit Podfile.lock and add a nested Gradle file
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            printf '\n  - RNScreens (4.0.0)\n' >> "$TEST_DIR/ios/Podfile.lock"
+            mkdir -p "$TEST_DIR/android/feature"
+            echo 'dependencies {}' > "$TEST_DIR/android/feature/build.gradle"
+    - path::./:
+        inputs:
+        - key: $KEY
+    - script:
+        title: Verify — key changed
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            [ "$H1" != "$BUNDLE_HASH_STRING" ] || { echo "FAIL: native change not detected"; exit 1; }
+            echo "PASS: native change invalidates"
+
+  # Invalidate: a patch-package patch (patches/) change must move the key.
+  test_patch_change_invalidates:
+    steps:
+    - bundle::setup_rn: {}
+    - path::./:
+        inputs:
+        - key: $KEY
+    - script:
+        inputs:
+        - content: envman add --key H1 --value "$BUNDLE_HASH_STRING"
+    - script:
+        title: Change — edit the patch file
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            printf '\n+another change\n' >> "$TEST_DIR/patches/react-native+0.76.0.patch"
+    - path::./:
+        inputs:
+        - key: $KEY
+    - script:
+        title: Verify — key changed
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -euo pipefail
+            [ "$H1" != "$BUNDLE_HASH_STRING" ] || { echo "FAIL: patch change not detected"; exit 1; }
+            echo "PASS: patch change invalidates"
