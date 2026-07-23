@@ -76,16 +76,18 @@ func (s FingerprintStep) ProcessConfig() (Config, error) {
 // Run hashes the configured paths (minus the ignore patterns) into the
 // fingerprint and applies the optional key prefix.
 func (s FingerprintStep) Run(config Config) (Result, error) {
-	if len(config.Paths) == 0 {
-		return Result{}, fmt.Errorf("no paths provided in 'paths'")
-	}
-
 	fingerprint, err := fingerprintPaths(os.DirFS(config.ProjectDir), config.Paths, config.IgnorePaths, s.logger)
 	if err != nil {
 		return Result{}, fmt.Errorf("fingerprint paths: %w", err)
 	}
+
 	if fingerprint == "" {
-		return Result{}, fmt.Errorf("no files matched by 'paths' (after applying 'ignore_paths') — nothing to fingerprint")
+		// No inputs matched. Export an empty key (not a namespaced-but-empty
+		// "prefix-" that would falsely hit) so restore-cache misses and the app
+		// is rebuilt — the safe default rather than reusing a stale build.
+		s.logger.Warnf("No files matched by 'paths' (after applying 'ignore_paths').")
+		s.logger.Warnf("Exporting an empty %s to force a cache miss (rebuild).", bundleHashStringKey)
+		return Result{BundleHashString: ""}, nil
 	}
 
 	return Result{BundleHashString: withKeyPrefix(config.KeyPrefix, fingerprint)}, nil

@@ -16,6 +16,8 @@ It hashes the files and folders in `paths` (folders are hashed recursively), whi
 
 Use `BUNDLE_HASH_STRING` as the key for `restore-cache` / `save-cache`, then gate the native/bundle build on restore-cache's `BITRISE_CACHE_HIT` output. On a hit, repack the new JS bundle into the cached app and re-sign.
 
+The step is skippable: if fingerprinting can't produce a key (or fails), it exports an **empty** `BUNDLE_HASH_STRING` — a cache miss that safely forces a rebuild — rather than blocking your pipeline.
+
 **Capture every native input.** The fingerprint decides whether a previously compiled native app can be reused. If `paths`/`ignore_paths` omit an input that affects the native build (a native module dir, a config plugin, an extra lockfile), a native change may not move the key and you could repack onto a **stale binary**. Extend `paths` for your project when needed.
 
 This is a lightweight, do-it-yourself pattern built on free Bitrise cache steps. For a fully managed, compilation-level remote cache across Gradle, Xcode (LLVM CAS) and C++, see Bitrise Build Cache for React Native: https://bitrise.io/platform/build-cache/react-native
@@ -47,7 +49,7 @@ You can also run this step directly with [Bitrise CLI](https://github.com/bitris
 
 | Environment Variable | Description |
 | --- | --- |
-| `BUNDLE_HASH_STRING` | The computed native-input fingerprint, prefixed with `key_prefix` if set. Always set on success (the step fails rather than exporting an empty key). Use it as the key for `restore-cache` / `save-cache` steps; gate the build on restore-cache's `BITRISE_CACHE_HIT` output. |
+| `BUNDLE_HASH_STRING` | The computed native-input fingerprint, prefixed with `key_prefix` if set. **Empty** when no inputs matched — treat an empty value as a cache miss and rebuild the app. Use it as the key for `restore-cache` / `save-cache` steps; gate the build on restore-cache's `BITRISE_CACHE_HIT` output. |
 </details>
 
 ## 🙋 Contributing

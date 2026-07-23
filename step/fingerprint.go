@@ -44,24 +44,32 @@ func withKeyPrefix(prefix, fingerprint string) string {
 // and directory matches are walked recursively. Each file contributes its
 // fsys-relative path (so the digest is independent of where the project is
 // checked out) bound to its own content hash.
+//
+// A malformed pattern or an unexpected I/O error is fatal: we never return a
+// digest computed over a partially-read input set (that could hide a real
+// change and reuse a stale native build).
 func fingerprintPaths(fsys fs.FS, paths, ignore []string, logger log.Logger) (string, error) {
 	ignore = normalizePatterns(ignore) // normalize once, not per walked entry
 
 	seen := map[string]bool{}
 	var rels []string
 	for _, p := range paths {
-		pattern := path.Clean(filepath.ToSlash(p))
-		matches, err := doublestar.Glob(fsys, pattern)
+		matches, err := doublestar.Glob(fsys, path.Clean(filepath.ToSlash(p)))
 		if err != nil {
-			logger.Warnf("Invalid path pattern %q: %s", p, err)
-			continue
+			return "", fmt.Errorf("invalid path pattern %q: %w", p, err)
 		}
 		if len(matches) == 0 {
+			// Not fatal: the default paths intentionally list optional inputs
+			// (yarn.lock, pnpm-lock.yaml, app.config.js, …) that may be absent.
 			logger.Warnf("No match for %q", p)
 			continue
 		}
 		for _, match := range matches {
-			for _, rel := range collect(fsys, match, ignore, logger) {
+			files, err := collect(fsys, match, ignore)
+			if err != nil {
+				return "", err
+			}
+			for _, rel := range files {
 				if !seen[rel] {
 					seen[rel] = true
 					rels = append(rels, rel)
@@ -77,11 +85,12 @@ func fingerprintPaths(fsys fs.FS, paths, ignore []string, logger log.Logger) (st
 
 	outer := sha256.New()
 	for _, rel := range rels {
-		fileHash, err := hashFileContent(fsys, rel)
+		fileHash, err := hashFileContent(fsys, rel, logger)
 		if err != nil {
 			return "", err
 		}
 		logger.Debugf("  %s  %s", fileHash[:12], rel)
+		// sha256's Write never returns an error, but check defensively.
 		if _, err := io.WriteString(outer, rel+"\x00"+fileHash+"\n"); err != nil {
 			return "", err
 		}
@@ -90,27 +99,27 @@ func fingerprintPaths(fsys fs.FS, paths, ignore []string, logger log.Logger) (st
 }
 
 // collect returns the fsys-relative paths of the regular files at root, walking
-// it recursively if it is a directory. Ignored entries and symlinks are skipped
-// (ignored directories are not descended into).
-func collect(fsys fs.FS, root string, ignore []string, logger log.Logger) []string {
+// it recursively if it is a directory. Ignored entries (and their subtrees) and
+// symlinks are skipped; an unexpected I/O error aborts so we never fingerprint a
+// partially-read input set.
+func collect(fsys fs.FS, root string, ignore []string) ([]string, error) {
 	info, err := fs.Stat(fsys, root)
 	if err != nil {
-		logger.Warnf("Skipping %q: %s", root, err)
-		return nil
+		return nil, fmt.Errorf("stat %s: %w", root, err)
 	}
 
 	if !info.IsDir() {
+		// Skip ignored files and non-regular entries (sockets, devices, …).
 		if isIgnored(root, ignore) || !info.Mode().IsRegular() {
-			return nil
+			return nil, nil
 		}
-		return []string{root}
+		return []string{root}, nil
 	}
 
 	var out []string
-	_ = fs.WalkDir(fsys, root, func(p string, d fs.DirEntry, walkErr error) error {
+	err = fs.WalkDir(fsys, root, func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			logger.Warnf("Skipping %q: %s", p, walkErr)
-			return nil //nolint:nilerr
+			return fmt.Errorf("access %s: %w", p, walkErr)
 		}
 		if d.IsDir() {
 			if p != root && isIgnored(p, ignore) {
@@ -118,6 +127,8 @@ func collect(fsys fs.FS, root string, ignore []string, logger log.Logger) []stri
 			}
 			return nil
 		}
+		// Skip symlinks and other irregular entries: they are not deterministic
+		// build inputs, and following symlinks risks walk loops.
 		if d.Type()&fs.ModeSymlink != 0 || !d.Type().IsRegular() {
 			return nil
 		}
@@ -126,7 +137,10 @@ func collect(fsys fs.FS, root string, ignore []string, logger log.Logger) []stri
 		}
 		return nil
 	})
-	return out
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // normalizePatterns cleans each pattern to a slash path once, so matching does
@@ -153,12 +167,18 @@ func isIgnored(rel string, ignore []string) bool {
 	return false
 }
 
-func hashFileContent(fsys fs.FS, name string) (string, error) {
+func hashFileContent(fsys fs.FS, name string, logger log.Logger) (string, error) {
 	f, err := fsys.Open(name)
 	if err != nil {
 		return "", fmt.Errorf("open %s: %w", name, err)
 	}
-	defer func() { _ = f.Close() }()
+	defer func() {
+		// A Close error on a read-only file carries no data-loss risk and must
+		// not fail the fingerprint, but log it rather than swallow it silently.
+		if cerr := f.Close(); cerr != nil {
+			logger.Warnf("Close %s: %s", name, cerr)
+		}
+	}()
 
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {

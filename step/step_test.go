@@ -155,11 +155,29 @@ func TestFingerprint_GlobInPaths(t *testing.T) {
 	}
 }
 
-func TestRun_EmptyWhenEverythingIgnoredFails(t *testing.T) {
+func TestRun_MalformedPatternFails(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "package.json"), `{}`)
+	// An unterminated character class is a malformed pattern -> fatal, so we
+	// never silently fingerprint an incomplete input set.
+	if _, err := runPaths(t, dir, []string{"["}, nil, ""); err == nil {
+		t.Fatal("expected an error for a malformed path pattern")
+	}
+}
+
+func TestRun_EmptyExportsEmptyKeyForRebuild(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "android", "app", "build.gradle"), "x")
-	if _, err := runPaths(t, dir, []string{"android"}, []string{"android"}, ""); err == nil {
-		t.Fatal("expected an error when all paths are ignored")
+
+	// Everything ignored -> no inputs. The step must not fail; it exports an
+	// empty key (a cache miss / rebuild trigger), and must NOT apply the prefix
+	// to an empty value (that would be a constant, falsely-hitting key).
+	h, err := runPaths(t, dir, []string{"android"}, []string{"android"}, "ios")
+	if err != nil {
+		t.Fatalf("empty result should not error, got: %v", err)
+	}
+	if h != "" {
+		t.Fatalf("expected an empty key for a rebuild trigger, got %q", h)
 	}
 }
 
