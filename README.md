@@ -2,8 +2,7 @@
 
 [![Step changelog](https://shields.io/github/v/release/bitrise-steplib/bitrise-step-react-native-fingerprint?include_prereleases&label=changelog&color=blueviolet)](https://github.com/bitrise-steplib/bitrise-step-react-native-fingerprint/releases)
 
-Fingerprints your React Native native inputs (native project folders, lockfiles, config, patches) and exports BUNDLE_HASH_STRING, so subsequent cache steps can skip rebuilding native modules on JS-only changes.
-
+Fingerprints your native inputs and exports BUNDLE_HASH_STRING so caches skip native rebuilds.
 
 <details>
 <summary>Description</summary>

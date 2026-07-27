@@ -1,7 +1,6 @@
 title: |-
   React Native Fingerprint
-summary: |
-  Fingerprints your React Native native inputs (native project folders, lockfiles, config, patches) and exports BUNDLE_HASH_STRING, so subsequent cache steps can skip rebuilding native modules on JS-only changes.
+summary: Fingerprints your native inputs and exports BUNDLE_HASH_STRING so caches skip native rebuilds.
 description: |
   Computes a deterministic SHA-256 **fingerprint** of the inputs that determine your native build and exports it as **`BUNDLE_HASH_STRING`**, so you can key `restore-cache` / `save-cache` off it and skip the expensive native build when only JavaScript changed.
 
