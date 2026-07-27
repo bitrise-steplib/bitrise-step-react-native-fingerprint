@@ -1,8 +1,8 @@
 # Limitations & known gaps
 
 This step fingerprints a project by taking **content checksums** of the files
-and folders in `paths` (folders hashed recursively), minus anything matched by
-`ignore_paths`. That is fast and dependency-light, but it is *syntactic*: it
+and folders in `path_list` (folders hashed recursively), minus anything matched by
+`ignore_path_list`. That is fast and dependency-light, but it is *syntactic*: it
 reacts to file bytes, not to the semantic question "does this change actually
 affect the compiled native app?". That yields two classes of imperfection.
 
@@ -27,14 +27,14 @@ native file change is caught), but residual cases remain:
 
 - **Native changes that live only in `node_modules`.** A native module pulled
   via a `file:`/git dependency or `npm link`, or native code that changes
-  without a lockfile change, is not hashed unless you add it to `paths`.
+  without a lockfile change, is not hashed unless you add it to `path_list`.
 - **Inputs outside `project_dir`.** Monorepo/workspace packages or shared native
   code outside the project root are invisible unless explicitly listed.
-- **Misconfiguration.** Removing `ios`/`android` from `paths`, a wrong
-  `project_dir`, or an `ignore_paths` entry that is too broad can silently drop
+- **Misconfiguration.** Removing `ios`/`android` from `path_list`, a wrong
+  `project_dir`, or an `ignore_path_list` entry that is too broad can silently drop
   a real input.
 
-## Why `ignore_paths` matters (correctness, not just speed)
+## Why `ignore_path_list` matters (correctness, not just speed)
 
 Folder hashing REQUIRES ignores for two reasons:
 
@@ -53,8 +53,8 @@ machine-specific paths under the hashed folders.
 - Enable `verbose` and confirm the logged file list is what you expect.
 - Sanity-check that `BUNDLE_HASH_STRING` **changes** on a known native change
   (e.g. bump a Pod) and is **stable** across a JS-only change.
-- Extend `paths` to cover native inputs outside the standard `ios`/`android`
-  layout; tighten `ignore_paths` if a volatile file is sneaking into the hash.
+- Extend `path_list` to cover native inputs outside the standard `ios`/`android`
+  layout; tighten `ignore_path_list` if a volatile file is sneaking into the hash.
 
 ## Future direction: semantic mode
 

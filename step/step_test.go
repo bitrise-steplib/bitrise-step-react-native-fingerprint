@@ -183,8 +183,8 @@ func TestRun_EmptyExportsEmptyKeyForRebuild(t *testing.T) {
 
 func TestProcessConfig_ParsesListsAndDefaultsProjectDir(t *testing.T) {
 	t.Setenv("project_dir", "")
-	t.Setenv("paths", "package.json\n  ios/  \n\n# comment\nandroid/\n")
-	t.Setenv("ignore_paths", "ios/Pods\nandroid/build")
+	t.Setenv("path_list", "package.json\n  ios/  \n\n# comment\nandroid/\n")
+	t.Setenv("ignore_path_list", "ios/Pods\nandroid/build")
 	t.Setenv("key_prefix", "")
 	t.Setenv("verbose", "false")
 

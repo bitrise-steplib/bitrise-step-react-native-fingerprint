@@ -14,8 +14,8 @@ const bundleHashStringKey = "BUNDLE_HASH_STRING"
 // Input maps the step inputs (see step.yml) to Go fields.
 type Input struct {
 	ProjectDir  string `env:"project_dir"`
-	Paths       string `env:"paths,required"`
-	IgnorePaths string `env:"ignore_paths"`
+	Paths       string `env:"path_list,required"`
+	IgnorePaths string `env:"ignore_path_list"`
 	KeyPrefix   string `env:"key_prefix"`
 	Verbose     bool   `env:"verbose"`
 }
@@ -85,7 +85,7 @@ func (s FingerprintStep) Run(config Config) (Result, error) {
 		// No inputs matched. Export an empty key (not a namespaced-but-empty
 		// "prefix-" that would falsely hit) so restore-cache misses and the app
 		// is rebuilt — the safe default rather than reusing a stale build.
-		s.logger.Warnf("No files matched by 'paths' (after applying 'ignore_paths').")
+		s.logger.Warnf("No files matched by 'path_list' (after applying 'ignore_path_list').")
 		s.logger.Warnf("Exporting an empty %s to force a cache miss (rebuild).", bundleHashStringKey)
 		return Result{BundleHashString: ""}, nil
 	}

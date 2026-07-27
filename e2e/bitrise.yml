@@ -55,11 +55,11 @@ workflows:
   test_deterministic:
     steps:
     - bundle::setup_rn: {}
-    - path::./: {title: first run, inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
+    - path::./: {title: first run, inputs: [{project_dir: $TEST_DIR}, {path_list: $PATHS}, {ignore_path_list: $IGNORE}]}
     - script:
         inputs:
         - content: envman add --key H1 --value "$BUNDLE_HASH_STRING"
-    - path::./: {title: second run, inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
+    - path::./: {title: second run, inputs: [{project_dir: $TEST_DIR}, {path_list: $PATHS}, {ignore_path_list: $IGNORE}]}
     - script:
         title: Verify — identical
         inputs:
@@ -73,7 +73,7 @@ workflows:
   test_key_prefix:
     steps:
     - bundle::setup_rn: {}
-    - path::./: {title: with prefix, inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}, {key_prefix: ios}]}
+    - path::./: {title: with prefix, inputs: [{project_dir: $TEST_DIR}, {path_list: $PATHS}, {ignore_path_list: $IGNORE}, {key_prefix: ios}]}
     - script:
         title: Verify — prefix applied
         inputs:
@@ -89,7 +89,7 @@ workflows:
   test_js_only_change_is_stable:
     steps:
     - bundle::setup_rn: {}
-    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {path_list: $PATHS}, {ignore_path_list: $IGNORE}]}
     - script:
         inputs:
         - content: envman add --key H1 --value "$BUNDLE_HASH_STRING"
@@ -101,7 +101,7 @@ workflows:
             set -euo pipefail
             printf '\n// edited\n' >> "$TEST_DIR/App.tsx"
             echo 'export const x = 1;' > "$TEST_DIR/extra.js"
-    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {path_list: $PATHS}, {ignore_path_list: $IGNORE}]}
     - script:
         title: Verify — key unchanged
         inputs:
@@ -114,7 +114,7 @@ workflows:
   test_ignored_change_is_stable:
     steps:
     - bundle::setup_rn: {}
-    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {path_list: $PATHS}, {ignore_path_list: $IGNORE}]}
     - script:
         inputs:
         - content: envman add --key H1 --value "$BUNDLE_HASH_STRING"
@@ -125,7 +125,7 @@ workflows:
             #!/usr/bin/env bash
             set -euo pipefail
             printf 'generated v2\n' > "$TEST_DIR/android/build/generated.txt"
-    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {path_list: $PATHS}, {ignore_path_list: $IGNORE}]}
     - script:
         title: Verify — key unchanged
         inputs:
@@ -138,7 +138,7 @@ workflows:
   test_dependency_change_invalidates:
     steps:
     - bundle::setup_rn: {}
-    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {path_list: $PATHS}, {ignore_path_list: $IGNORE}]}
     - script:
         inputs:
         - content: envman add --key H1 --value "$BUNDLE_HASH_STRING"
@@ -149,7 +149,7 @@ workflows:
             #!/usr/bin/env bash
             set -euo pipefail
             echo '{"lockfileVersion":3,"packages":{"changed":true}}' > "$TEST_DIR/package-lock.json"
-    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {path_list: $PATHS}, {ignore_path_list: $IGNORE}]}
     - script:
         title: Verify — key changed
         inputs:
@@ -162,7 +162,7 @@ workflows:
   test_config_change_invalidates:
     steps:
     - bundle::setup_rn: {}
-    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {path_list: $PATHS}, {ignore_path_list: $IGNORE}]}
     - script:
         inputs:
         - content: envman add --key H1 --value "$BUNDLE_HASH_STRING"
@@ -173,7 +173,7 @@ workflows:
             #!/usr/bin/env bash
             set -euo pipefail
             echo '{"name":"rn-demo","displayName":"RN Demo v2"}' > "$TEST_DIR/app.json"
-    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {path_list: $PATHS}, {ignore_path_list: $IGNORE}]}
     - script:
         title: Verify — key changed
         inputs:
@@ -186,7 +186,7 @@ workflows:
   test_native_change_invalidates:
     steps:
     - bundle::setup_rn: {}
-    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {path_list: $PATHS}, {ignore_path_list: $IGNORE}]}
     - script:
         inputs:
         - content: envman add --key H1 --value "$BUNDLE_HASH_STRING"
@@ -199,7 +199,7 @@ workflows:
             printf '\n  - RNScreens (4.0.0)\n' >> "$TEST_DIR/ios/Podfile.lock"
             mkdir -p "$TEST_DIR/android/feature"
             echo 'dependencies {}' > "$TEST_DIR/android/feature/build.gradle"
-    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {path_list: $PATHS}, {ignore_path_list: $IGNORE}]}
     - script:
         title: Verify — key changed
         inputs:
@@ -212,7 +212,7 @@ workflows:
   test_patch_change_invalidates:
     steps:
     - bundle::setup_rn: {}
-    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {path_list: $PATHS}, {ignore_path_list: $IGNORE}]}
     - script:
         inputs:
         - content: envman add --key H1 --value "$BUNDLE_HASH_STRING"
@@ -223,7 +223,7 @@ workflows:
             #!/usr/bin/env bash
             set -euo pipefail
             printf '\n+another change\n' >> "$TEST_DIR/patches/react-native+0.76.0.patch"
-    - path::./: {inputs: [{project_dir: $TEST_DIR}, {paths: $PATHS}, {ignore_paths: $IGNORE}]}
+    - path::./: {inputs: [{project_dir: $TEST_DIR}, {path_list: $PATHS}, {ignore_path_list: $IGNORE}]}
     - script:
         title: Verify — key changed
         inputs:
