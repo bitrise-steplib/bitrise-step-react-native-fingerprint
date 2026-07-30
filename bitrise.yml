@@ -18,7 +18,7 @@ workflows:
         - workflow: e2e
 
   sample:
-    summary: Local debugging convenience — evaluates a key template over generated files and prints the output.
+    summary: Local debugging convenience — fingerprints a generated RN project and prints the output.
     envs:
     - SAMPLE_DIR: _tmp
     steps:
@@ -37,7 +37,9 @@ workflows:
     - path::./:
         title: React Native Fingerprint
         inputs:
-        - key: "build-fingerprint-{{ checksum \"$SAMPLE_DIR/package.json\" \"$SAMPLE_DIR/package-lock.json\" \"$SAMPLE_DIR/ios/Podfile.lock\" \"$SAMPLE_DIR/android/**/*.gradle\" }}"
+        # path_list / ignore_path_list left at their defaults
+        - project_dir: $SAMPLE_DIR
+        - key_prefix: build-fingerprint
         - verbose: "true"
     - script:
         title: Print exported output
