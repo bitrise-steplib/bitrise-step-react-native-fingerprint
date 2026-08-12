@@ -52,4 +52,6 @@ workflows:
   generate_readme:
     summary: Regenerates README.md from step.yml. Run manually after any step.yml change.
     steps:
-    - git::https://github.com/bitrise-steplib/steps-readme-generator.git@main: {}
+    - git::https://github.com/bitrise-steplib/steps-readme-generator.git@main:
+        inputs:
+        - example_section: docs/examples.md
